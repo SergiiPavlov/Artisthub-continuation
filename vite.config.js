@@ -2,48 +2,38 @@ import { defineConfig } from 'vite';
 import { glob } from 'glob';
 import injectHTML from 'vite-plugin-html-inject';
 import FullReload from 'vite-plugin-full-reload';
-import SortCss from 'postcss-sort-media-queries';
+import purgeCss from 'vite-plugin-purgecss';
+import { visualizer } from 'rollup-plugin-visualizer';
 
 export default defineConfig(({ command }) => {
+  const isDev = command === 'serve';
   return {
-    define: {
-      [command === 'serve' ? 'global' : '_global']: {},
-    },
+    base: isDev ? '/' : '/Artisthub-continuation/',
     root: 'src',
-    base: process.env.NODE_ENV === 'production' ? '/ForceTech7-Website2/' : '/',
+    publicDir: 'src/public',
     build: {
+      outDir: '../dist',
+      emptyOutDir: true,
       sourcemap: true,
       rollupOptions: {
         input: glob.sync('./src/*.html'),
         output: {
-          manualChunks(id) {
-            if (id.includes('node_modules')) {
-              return 'vendor';
-            }
-          },
-          entryFileNames: chunkInfo => {
-            if (chunkInfo.name === 'commonHelpers') {
-              return 'commonHelpers.js';
-            }
-            return '[name].js';
-          },
-          assetFileNames: assetInfo => {
-            if (assetInfo.name && assetInfo.name.endsWith('.html')) {
-              return '[name].[ext]';
-            }
-            return 'assets/[name]-[hash][extname]';
-          },
+          manualChunks(id) { if (id.includes('node_modules')) return 'vendor'; },
+          entryFileNames: c => (c.name === 'commonHelpers' ? 'commonHelpers.js' : '[name].js'),
+          assetFileNames: a => (a.name && a.name.endsWith('.html')
+            ? '[name].[ext]'
+            : 'assets/[name]-[hash][extname]'),
         },
       },
-      outDir: '../dist',
-      emptyOutDir: true,
     },
     plugins: [
       injectHTML(),
       FullReload(['./src/**/**.html']),
-      SortCss({
-        sort: 'mobile-first',
+      purgeCss({
+        content: ['./src/index.html', './src/**/*.html', './src/**/*.js'],
+        safelist: [/^is-/, /^btn-/, /^toast-/, /^active$/, /^hidden$/, /^open$/],
       }),
+      visualizer({ filename: 'dist/stats.html', brotliSize: true, gzipSize: true }),
     ],
   };
 });
