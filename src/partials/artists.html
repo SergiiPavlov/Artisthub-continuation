@@ -15,11 +15,18 @@
           class="filters__view"
           type="button"
           aria-pressed="false"
+          data-action="view-list"
+          data-view="list"
         >
           List view
         </button>
 
-        <button id="filters-reset" type="button" class="filters__reset">
+        <button
+          id="filters-reset"
+          type="button"
+          class="filters__reset"
+          data-action="filters-reset"
+        >
           Reset
         </button>
 
@@ -29,6 +36,7 @@
           class="filters__toggle"
           aria-controls="filters-panel"
           aria-expanded="false"
+          data-action="filters-toggle"
         >
           <span>Search and Filters</span>
         </button>
@@ -42,6 +50,7 @@
             type="button"
             class="fld-search__btn"
             aria-label="Search"
+            data-action="search"
           >
             <svg class="ico" aria-hidden="true" width="24" height="24">
               <!-- якщо у тебе inline-спрайт: href="#icon-search"; якщо файл: href="/img/sprite.svg#icon-search" -->
@@ -84,7 +93,12 @@
         </div>
 
         <!-- Mix Radio / Next (иконки оставлены) -->
-        <button id="random-radio" type="button" class="btn btn--purple">
+        <button
+          id="random-radio"
+          type="button"
+          class="btn btn--purple"
+          data-action="play next"
+        >
           <span>Mix Radio</span>
           <svg class="ico" aria-hidden="true" width="24" height="24">
             <use href="/img/sprite.svg#icon-icon_youtube_footer"></use>
@@ -97,7 +111,12 @@
           </svg>
         </button>
 
-        <button id="mixradio-menu-btn" type="button" class="btn btn--purple">
+        <button
+          id="mixradio-menu-btn"
+          type="button"
+          class="btn btn--purple"
+          data-action="radio-menu"
+        >
           <span>Radio Menu</span>
           <svg class="ico" aria-hidden="true" width="24" height="24">
             <use

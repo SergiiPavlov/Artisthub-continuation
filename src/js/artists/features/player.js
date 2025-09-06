@@ -1,3 +1,4 @@
+/* eslint-env browser */
 /* global YT */
 
 let _instance = null;

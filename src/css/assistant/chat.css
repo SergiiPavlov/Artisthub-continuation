@@ -1,0 +1,227 @@
+/* src/css/assistant/chat.css */
+:root {
+  --as-z: 2147480000;
+  --as-radius: 16px;
+  --as-gap: 12px;
+  --as-panel-bg: rgba(28, 28, 30, 0.96);
+  --as-panel-border: rgba(255, 255, 255, 0.08);
+  --as-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  --as-text: #e9e9ee;
+  --as-dim: #b7b7c0;
+  --as-accent: #6ea8fe;
+  --as-green: #a3e635;
+  --as-red: #ff6b6b;
+
+  --as-bubble-user-bg: #1f2937; /* тёмно-серая */
+  --as-bubble-user-text: #e5e7eb;
+  --as-bubble-bot-bg: #0b6bcb1a; /* лёгкий синий тинт */
+  --as-bubble-bot-text: #dbeafe;
+}
+
+/* Кнопка-значок (всегда видна) */
+.assistant {
+  position: fixed;
+  inset: auto 20px 20px auto;
+  z-index: var(--as-z);
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell,
+    'Noto Sans', Arial, sans-serif;
+  color: var(--as-text);
+}
+.assistant__toggle {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  border: 1px solid var(--as-panel-border);
+  background: #0ea5e9; /* яркая бирюза */
+  color: #fff;
+  box-shadow: var(--as-shadow);
+  cursor: pointer;
+  font-size: 26px;
+  line-height: 56px;
+  text-align: center;
+}
+.assistant__toggle:focus {
+  outline: 2px solid var(--as-accent);
+  outline-offset: 3px;
+}
+
+/* Панель */
+.assistant__panel {
+  position: fixed;
+  right: 20px;
+  bottom: 88px;
+  width: min(420px, calc(100vw - 32px));
+  max-height: min(78vh, 680px);
+  background: var(--as-panel-bg);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--as-panel-border);
+  border-radius: var(--as-radius);
+  box-shadow: var(--as-shadow);
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  overflow: hidden;
+}
+
+/* Шапка */
+.assistant__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--as-panel-border);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent);
+}
+.assistant__header strong {
+  font-weight: 700;
+  color: #fff;
+}
+.assistant__close {
+  border: 0;
+  background: transparent;
+  color: var(--as-dim);
+  font-size: 20px;
+  cursor: pointer;
+}
+.assistant__close:hover {
+  color: #fff;
+}
+
+/* Лог сообщений */
+.assistant__log {
+  padding: 12px;
+  overflow: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+}
+.assistant__msg {
+  max-width: 90%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  margin: 8px 0;
+  font-size: 14px;
+  line-height: 1.35;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+}
+.assistant__msg--user {
+  margin-left: auto;
+  background: var(--as-bubble-user-bg);
+  color: var(--as-bubble-user-text);
+}
+.assistant__msg--bot {
+  margin-right: auto;
+  background: var(--as-bubble-bot-bg);
+  color: var(--as-bubble-bot-text);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+}
+
+/* Панель ввода */
+.assistant__controls {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: var(--as-gap);
+  padding: 10px;
+  border-top: 1px solid var(--as-panel-border);
+  background: rgba(255, 255, 255, 0.03);
+}
+.assistant__mic {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid var(--as-panel-border);
+  background: #111827;
+  color: #e5e7eb;
+  cursor: pointer;
+  font-size: 18px;
+}
+.assistant__mic.is-on {
+  background: #ef4444;
+  color: #fff;
+}
+.assistant__input {
+  height: 40px;
+  border-radius: 10px;
+  padding: 0 12px;
+  border: 1px solid var(--as-panel-border);
+  background: #0b0b0d;
+  color: #f5f5f7;
+}
+.assistant__input::placeholder {
+  color: #8f93a1;
+}
+.assistant__send {
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--as-panel-border);
+  background: #2563eb;
+  color: #fff;
+  cursor: pointer;
+  font-weight: 600;
+}
+.assistant__send:hover {
+  filter: brightness(1.1);
+}
+
+/* Узкие экраны */
+@media (max-width: 480px) {
+  .assistant {
+    right: 12px;
+    bottom: 12px;
+  }
+  .assistant__panel {
+    right: 12px;
+    bottom: 76px;
+  }
+}
+
+/* Высокий контраст для ultra-dark фонов */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --as-bubble-bot-bg: rgba(56, 189, 248, 0.08);
+  }
+}
+
+/* Voice settings mini panel */
+.assistant__hdrbtns {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+.assistant__gear {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-size: 1rem;
+  opacity: 0.8;
+}
+.assistant__gear:hover {
+  opacity: 1;
+}
+
+.assistant__settings {
+  display: grid;
+  grid-template-columns: 1fr 140px 140px;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.2);
+}
+.assistant__settings .as-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.assistant__settings .as-label {
+  font-size: 0.85rem;
+  opacity: 0.9;
+}
+.assistant__settings select,
+.assistant__settings input[type='range'] {
+  width: 100%;
+  background: #111;
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 0.5rem;
+  padding: 0.4rem 0.5rem;
+}

@@ -3,13 +3,13 @@ import js from "@eslint/js";
 import globals from "globals";
 
 export default [
-  // Игнор сборок/отчётов
+  // игнор сборок/отчётов
   { ignores: ["dist/**", "reports/**", "node_modules/**"] },
 
-  // Базовые рекомендации
+  // базовые рекомендации
   js.configs.recommended,
 
-  // Конфиги (Node-окружение, чтобы не падал 'process is not defined')
+  // конфиги (Node-окружение)
   {
     files: ["vite.config.js", "postcss.config.cjs", "eslint.config.js"],
     languageOptions: {
@@ -19,7 +19,7 @@ export default [
     }
   },
 
-  // Исходники (браузер)
+  // исходники (браузер)
   {
     files: ["src/**/*.js"],
     languageOptions: {
@@ -29,8 +29,9 @@ export default [
     },
     rules: {
       "no-undef": "error",
-      // ↓ на время чистки отключаем no-empty полностью, чтобы не было красноты
+      // временно выключаем, чтобы пустые блоки не сыпались ошибками
       "no-empty": "off",
+      // предупреждения за неиспользуемые — оставим мягко
       "no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }]
     }
   }

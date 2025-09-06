@@ -1,13 +1,12 @@
 {
   "compilerOptions": {
     "checkJs": true,
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
     "allowJs": true,
-    "module": "es2022",
-    "target": "es2022",
-    "moduleResolution": "bundler",
-    "strictNullChecks": true,
-    "types": ["node"]
+    "baseUrl": "./src"
   },
-  "include": ["src", "vite.config.js", "types"],
-  "exclude": ["node_modules", "dist", "reports"]
+  "exclude": ["dist", "node_modules"]
 }
