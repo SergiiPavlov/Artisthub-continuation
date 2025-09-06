@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/Artisthub-continuation/logo-icon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ArtistsHub | Website</title>
+
+    <!-- fonts -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Epilogue:wght@700&display=swap"
+      rel="stylesheet"
+    />
+
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cabin:wght@400&family=Roboto:wght@400&family=Sarabun:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- normalizer -->
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/normalize/8.0.1/normalize.min.css"
+    />
+    <!-- def-styles -->
+    <script type="module" crossorigin src="/Artisthub-continuation/index.js"></script>
+    <link rel="modulepreload" crossorigin href="/Artisthub-continuation/assets/vendor-BRhbAs4y.js">
+    <link rel="stylesheet" crossorigin href="/Artisthub-continuation/assets/vendor-BIx4N7Dj.css">
+    <link rel="stylesheet" crossorigin href="/Artisthub-continuation/assets/index-C6bFm7in.css">
+  </head>
+  <body>
+    <header class="header">
+  <div class="header-container container">
+    <a href="./index.html" class="header-logo" aria-label="Go to homepage">
+      <svg class="header-logo-icon" aria-hidden="true">
+        <use href="/Artisthub-continuation/assets/sprite-DL16Y-CB.svg#icon-logo"></use>
+      </svg>
+      <span class="sr-only">ArtistsHub</span>
+    </a>
+
+    <nav class="header-nav" aria-label="Main navigation">
+      <ul class="header-nav-list">
+        <li><a href="#artists-section" class="header-nav-link">Artists</a></li>
+        <li><a href="#about" class="header-nav-link">About Us</a></li>
+        <li><a href="#reviews" class="header-nav-link">Reviews</a></li>
+      </ul>
+    </nav>
+
+    <button
+      type="button"
+      class="burger-menu-btn"
+      aria-label="Open mobile menu"
+      aria-expanded="false"
+      aria-controls="mobile-menu"
+      data-menu-open
+    >
+      <svg class="burger-menu-icon" aria-hidden="true">
+        <use href="/Artisthub-continuation/assets/sprite-DL16Y-CB.svg#icon-icon_menu_mobile_navbar"></use>
+      </svg>
+    </button>
+  </div>
+
+  <div class="mobile-menu" id="mobile-menu" data-menu hidden>
+    <div class="mobile-menu-container">
+      <div class="mobile-menu-top container">
+        <a href="./index.html" class="header-logo">
+          <svg class="header-logo-icon" aria-hidden="true">
+            <use href="/Artisthub-continuation/assets/sprite-DL16Y-CB.svg#icon-logo"></use>
+          </svg>
+        </a>
+
+        <button
+          type="button"
+          class="mobile-menu-close-btn"
+          aria-label="Close mobile menu"
+          data-menu-close
+        >
+          <svg class="mobile-menu-close-icon" aria-hidden="true">
+            <use href="/Artisthub-continuation/assets/sprite-DL16Y-CB.svg#icon-icon_close"></use>
+          </svg>
+        </button>
+      </div>
+
+      <nav class="mobile-menu-nav" aria-label="Mobile navigation">
+        <ul class="mobile-menu-nav-list">
+          <li>
+            <a
+              href="#artists-section"
+              class="mobile-menu-nav-link"
+              data-menu-link
+              >Artists</a
+            >
+          </li>
+          <li>
+            <a href="#about" class="mobile-menu-nav-link" data-menu-link
+              >About Us</a
+            >
+          </li>
+          <li>
+            <a href="#reviews" class="mobile-menu-nav-link" data-menu-link
+              >Reviews</a
+            >
+          </li>
+        </ul>
+      </nav>
+    </div>
+  </div>
+</header>
+
+
+    <!-- Main Content import -->
+    <main>
+      <section class="hero-section" id="hero">
+  <div class="container hero-container">
+    <div class="hero-content">
+      <h1 class="hero-title">Discover Your Next Favorite Artist Today</h1>
+      <p class="hero-subtitle">
+        Dive into a world of music discoveries with ArtistsHub – your personal
+        guide to the boundless universe of sound. Explore, filter, and learn
+        about your favorite artists all in one place.
+      </p>
+      <a href="#artists-section" id="exploreBtn" class="hero-btn">
+        Explore Artists
+        <svg class="icon-play-btn" width="24" height="24">
+          <use href="/Artisthub-continuation/assets/sprite-DL16Y-CB.svg#icon-icon_play_hero_section"></use>
+        </svg>
+      </a>
+    </div>
+    <div class="hero-img"></div>
+  </div>
+</section>
+
+      <section id="artists-section" class="artists1 container">
+  <div class="artists1__head">
+    <p class="eyebrow">Artists</p>
+    <h2 class="title">Explore Your New Favorite Artists</h2>
+  </div>
+
+  <div class="artists1__layout">
+    <!-- TOOLBAR / FILTERS -->
+    <aside class="filters" id="filters">
+      <div class="filters__bar">
+        <!-- <span class="filters__label">Filters</span> -->
+
+        <button
+          id="view-toggle"
+          class="filters__view"
+          type="button"
+          aria-pressed="false"
+        >
+          List view
+        </button>
+
+        <button id="filters-reset" type="button" class="filters__reset">
+          Reset
+        </button>
+
+        <button
+          id="filters-toggle"
+          type="button"
+          class="filters__toggle"
+          aria-controls="filters-panel"
+          aria-expanded="false"
+        >
+          <span>Search and Filters</span>
+        </button>
+      </div>
+
+      <div id="filters-panel" class="filters__panel" aria-hidden="true">
+        <!-- Search -->
+        <label class="fld fld-search">
+          <button
+            id="flt-q-btn"
+            type="button"
+            class="fld-search__btn"
+            aria-label="Search"
+          >
+            <svg class="ico" aria-hidden="true" width="24" height="24">
+              <!-- якщо у тебе inline-спрайт: href="#icon-search"; якщо файл: href="/img/sprite.svg#icon-search" -->
+              <use href="#icon-search"></use>
+            </svg>
+          </button>
+          <input id="flt-q" type="search" placeholder="Search" />
+        </label>
+
+        <!-- Sorting -->
+        <div class="dd" data-dd="sort">
+          <button
+            class="dd__btn"
+            id="dd-sort-btn"
+            type="button"
+            aria-expanded="false"
+            aria-controls="dd-sort-list"
+          >
+            <span>Sorting</span>
+          </button>
+          <ul class="dd__list" id="dd-sort-list" role="listbox">
+            <li data-val="">Default</li>
+            <li data-val="asc">A–Z</li>
+            <li data-val="desc">Z–A</li>
+          </ul>
+        </div>
+
+        <!-- Genre -->
+        <div class="dd" data-dd="genre">
+          <button
+            class="dd__btn"
+            id="dd-genre-btn"
+            type="button"
+            aria-expanded="false"
+            aria-controls="dd-genre-list"
+          >
+            <span>Genre</span>
+          </button>
+          <ul class="dd__list" id="dd-genre-list" role="listbox"></ul>
+        </div>
+
+        <!-- Mix Radio / Next (иконки оставлены) -->
+        <button id="random-radio" type="button" class="btn btn--purple">
+          <span>Mix Radio</span>
+          <svg class="ico" aria-hidden="true" width="24" height="24">
+            <use href="/Artisthub-continuation/assets/sprite-DL16Y-CB.svg#icon-icon_youtube_footer"></use>
+          </svg>
+          <span>/ Next</span>
+          <svg class="ico" aria-hidden="true" width="24" height="24">
+            <use
+              href="/Artisthub-continuation/assets/sprite-DL16Y-CB.svg#icon-icon_right_button_feedback_sec"
+            ></use>
+          </svg>
+        </button>
+
+        <button id="mixradio-menu-btn" type="button" class="btn btn--purple">
+          <span>Radio Menu</span>
+          <svg class="ico" aria-hidden="true" width="24" height="24">
+            <use
+              href="/Artisthub-continuation/assets/sprite-DL16Y-CB.svg#icon-icon_right_button_feedback_sec"
+            ></use>
+          </svg>
+        </button>
+      </div>
+    </aside>
+
+    <!-- CONTENT -->
+    <div class="artists1__content">
+      <div id="artists-empty" class="empty" hidden>
+        <div class="empty__card">
+          <div class="empty__icon" aria-hidden="true">!</div>
+          <h3 class="empty__title">Silence on the stage…</h3>
+          <p class="empty__text">
+            Looks like no artists match your filters.<br class="empty__br" />
+            Try changing them or hit “Reset Filters” to bring back the beat.
+          </p>
+          <button class="empty__btn" id="empty-reset" type="button">
+            Reset filters
+          </button>
+        </div>
+      </div>
+
+      <div id="artists-loader" class="loader" hidden></div>
+      <ul id="artists-grid" class="grid"></ul>
+      <nav id="artists-pager" class="pager" aria-label="Pagination"></nav>
+    </div>
+  </div>
+</section>
+
+<div id="artist-modal" class="amodal" hidden>
+  <div class="amodal__backdrop"></div>
+  <div
+    class="amodal__dialog"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Artist details"
+  >
+    <button
+      id="am-close"
+      class="amodal__close"
+      type="button"
+      aria-label="Close"
+    >
+      ×
+    </button>
+    <div id="am-body" class="amodal__body">
+      <div class="amodal__loader loader"></div>
+    </div>
+  </div>
+</div>
+
+      <section id="about" class="about-section">
+  <div class="container div-about-section">
+    <div class="img-container-about-section">
+      <picture>
+        <source
+          media="(min-width: 1440px)"
+          srcset="/Artisthub-continuation/assets/about-desk-HsqW4UZp.png 1x, /Artisthub-continuation/assets/about-desk-2x-CX2XnouO.png 2x"
+        />
+        <source
+          media="(min-width: 768px)"
+          srcset="/Artisthub-continuation/assets/about-tabl-C64LF_9W.png 1x, /Artisthub-continuation/assets/about-tabl-2x-BtGB5xYF.png 2x"
+        />
+        <source
+          media="(max-width: 767px)"
+          srcset="/Artisthub-continuation/assets/about-mob-Ca6fZtx0.png 1x, /Artisthub-continuation/assets/about-mob-2x-BD25pXre.png 2x"
+        />
+        <img
+          src="/Artisthub-continuation/assets/about-mob-Ca6fZtx0.png"
+          srcset="/Artisthub-continuation/assets/about-mob-Ca6fZtx0.png 1x, /Artisthub-continuation/assets/about-mob-2x-BD25pXre.png 2x"
+          alt="Team"
+        />
+      </picture>
+    </div>
+
+    <div class="about-us-content">
+      <svg class="logo-svg" width="64" height="64">
+        <use href="/Artisthub-continuation/assets/sprite-DL16Y-CB.svg#icon-logo_icon_about_us"></use>
+      </svg>
+
+      <div class="about-us-descrp">
+        <h2 class="about-section-title">About ArtistsHub</h2>
+        <p class="about-section-description">
+          At ArtistsHub, our mission is to connect music lovers with the artists
+          they adore. We strive to create a vibrant community where discovering
+          new music is as enjoyable as listening to it.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+      <section id="reviews">
+  <div class="feedback-section container">
+    <h2 class="hidden">Feedbacks our visitors</h2>
+    <div class="swiper">
+      <div class="swiper-wrapper"></div>
+      <div class="swiper-button-prev">
+        <svg class="left-arrow" width="14" height="14">
+          <use href="/Artisthub-continuation/assets/sprite-DL16Y-CB.svg#icon-icon_right_button_feedback_sec"></use>
+        </svg>
+      </div>
+      <div class="swiper-button-next">
+        <svg width="14" height="14">
+          <use href="/Artisthub-continuation/assets/sprite-DL16Y-CB.svg#icon-icon_right_button_feedback_sec"></use>
+        </svg>
+      </div>
+
+      <div class="swiper-pagination"></div>
+    </div>
+    <button class="review-btn feedback-btn" type="button">
+      Leave feedback
+    </button>
+  </div>
+  <div class="overlay hidden">
+    <div class="modal">
+      <svg class="close-icon" width="14px" height="14px">
+        <use href="/Artisthub-continuation/assets/sprite-DL16Y-CB.svg#icon-icon_close"></use>
+      </svg>
+      <form id="feedback-form">
+        <h3 class="title-modal">Submit feedback</h3>
+        <div class="form-name">
+          <label>Name</label>
+          <input
+            class="form-input-name"
+            type="text"
+            placeholder="Emily"
+            required
+          />
+        </div>
+        <div class="form-message">
+          <label>Message</label>
+          <textarea
+            class="form-input-message"
+            placeholder="Type your message..."
+            required
+          ></textarea>
+        </div>
+        <div
+          id="customer-rating"
+          class="rating my-rating"
+          data-rating="0"
+        ></div>
+        <div class="send-btn-cont">
+          <button class="review-btn send-feedback-btn" type="submit">
+            Submit
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</section>
+
+    </main>
+
+    <footer class="footer-section">
+  <div class="container footer-container">
+    <div class="footer-logo-wrapper">
+      <a href="index.html" class="footer-logo">
+        <svg class="footer-logo-svg">
+          <use href="/Artisthub-continuation/assets/sprite-DL16Y-CB.svg#icon-logo"></use>
+        </svg>
+      </a>
+    </div>
+    <nav class="footer-nav">
+      <ul class="footer-nav-list">
+        <li class="footer-nav-item">
+          <a href="#artists" class="footer-nav-link">Artists</a>
+        </li>
+        <li class="footer-nav-item">
+          <a href="#about" class="footer-nav-link">About us</a>
+        </li>
+        <li class="footer-nav-item">
+          <a href="#reviews" class="footer-nav-link">Reviews</a>
+        </li>
+      </ul>
+    </nav>
+    <div class="divider"></div>
+    <div class="footer-social-wrapper">
+      <div class="footer-social">
+        <ul class="footer-social-list">
+          <li class="footer-social-item">
+            <a
+              class="footer-social-link"
+              href="https://www.instagram.com/"
+              rel="noopener noreferrer"
+              target="_blank"
+            >
+              <svg class="social-icon" width="40" height="40">
+                <use href="/Artisthub-continuation/assets/sprite-DL16Y-CB.svg#icon-icon_inst_footer"></use>
+              </svg>
+            </a>
+          </li>
+          <li class="footer-social-item">
+            <a
+              class="footer-social-link"
+              href="https://www.facebook.com/"
+              rel="noopener noreferrer"
+              target="_blank"
+            >
+              <svg class="social-icon" width="40" height="40">
+                <use href="/Artisthub-continuation/assets/sprite-DL16Y-CB.svg#icon-icon_facebook_footer"></use>
+              </svg>
+            </a>
+          </li>
+          <li class="footer-social-item">
+            <a
+              class="footer-social-link"
+              href="https://www.youtube.com/"
+              rel="noopener noreferrer"
+              target="_blank"
+            >
+              <svg class="social-icon" width="40" height="40">
+                <use href="/Artisthub-continuation/assets/sprite-DL16Y-CB.svg#icon-icon_youtube_footer"></use>
+              </svg>
+            </a>
+          </li>
+        </ul>
+      </div>
+      <div class="footer-text-wrapper">
+        <p class="footer-text">© 2025 ArtistsHub. All rights reserved.</p>
+      </div>
+    </div>
+  </div>
+</footer>
+
+    
+
+    <!--  import JS (main-file)-->
+  </body>
+</html>
