@@ -1,65 +1,88 @@
-/* src/css/assistant/chat.css */
+/* =============================
+   Chat Assistant (full CSS)
+   ============================= */
+
+/* Палитра и размеры */
 :root {
-  --as-z: 2147480000;
-  --as-radius: 16px;
+  --as-bg: #0f1115; /* фон страницы (на случай растягивания) */
+  --as-panel: #171a21; /* фон панели */
+  --as-panel-2: #1c2129; /* фон шапки/подложек */
+  --as-border: #2a3040; /* линии/границы */
+  --as-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+
+  --as-text: #e8eef5; /* основной текст */
+  --as-muted: #a9b3bf; /* приглушённый текст */
+  --as-accent: #66e1ff; /* акцент (кнопки/фокус) */
+
+  --as-bot: #1f2a33; /* пузырь бота */
+  --as-user: #23303c; /* пузырь пользователя */
+
+  --as-radius-lg: 16px;
+  --as-radius-md: 12px;
+  --as-radius-sm: 10px;
+
   --as-gap: 12px;
-  --as-panel-bg: rgba(28, 28, 30, 0.96);
-  --as-panel-border: rgba(255, 255, 255, 0.08);
-  --as-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
-  --as-text: #e9e9ee;
-  --as-dim: #b7b7c0;
-  --as-accent: #6ea8fe;
-  --as-green: #a3e635;
-  --as-red: #ff6b6b;
-
-  --as-bubble-user-bg: #1f2937; /* тёмно-серая */
-  --as-bubble-user-text: #e5e7eb;
-  --as-bubble-bot-bg: #0b6bcb1a; /* лёгкий синий тинт */
-  --as-bubble-bot-text: #dbeafe;
+  --as-z: 9999;
 }
 
-/* Кнопка-значок (всегда видна) */
+/* Базовые сбросы внутри виджета */
+.assistant,
+.assistant * {
+  box-sizing: border-box;
+  font: inherit;
+}
 .assistant {
-  position: fixed;
-  inset: auto 20px 20px auto;
-  z-index: var(--as-z);
-  font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell,
-    'Noto Sans', Arial, sans-serif;
-  color: var(--as-text);
+  color-scheme: dark;
 }
+
+/* ──────────────────────────────────────────────────────────────
+   Плавающая toggle-кнопка
+   ────────────────────────────────────────────────────────────── */
 .assistant__toggle {
+  position: fixed;
+  right: max(12px, env(safe-area-inset-right));
+  bottom: max(12px, env(safe-area-inset-bottom));
   width: 56px;
   height: 56px;
   border-radius: 50%;
-  border: 1px solid var(--as-panel-border);
-  background: #0ea5e9; /* яркая бирюза */
-  color: #fff;
-  box-shadow: var(--as-shadow);
+  border: 1px solid var(--as-border);
+  background: radial-gradient(120% 120% at 30% 30%, #202736 0%, #11141a 70%);
+  color: var(--as-text);
+  display: grid;
+  place-items: center;
   cursor: pointer;
-  font-size: 26px;
-  line-height: 56px;
-  text-align: center;
+  z-index: var(--as-z);
+  box-shadow: var(--as-shadow);
+  transition: transform 0.15s ease, opacity 0.15s ease;
 }
-.assistant__toggle:focus {
-  outline: 2px solid var(--as-accent);
-  outline-offset: 3px;
+.assistant__toggle:hover {
+  transform: translateY(-1px);
+}
+.assistant__toggle:active {
+  transform: translateY(0);
 }
 
-/* Панель */
+/* ──────────────────────────────────────────────────────────────
+   Панель
+   ────────────────────────────────────────────────────────────── */
 .assistant__panel {
   position: fixed;
-  right: 20px;
-  bottom: 88px;
-  width: min(420px, calc(100vw - 32px));
-  max-height: min(78vh, 680px);
-  background: var(--as-panel-bg);
-  backdrop-filter: blur(8px);
-  border: 1px solid var(--as-panel-border);
-  border-radius: var(--as-radius);
+  right: max(12px, env(safe-area-inset-right));
+  bottom: max(88px, env(safe-area-inset-bottom)); /* над пузырём */
+  width: min(420px, 96vw);
+  max-height: calc(100vh - 120px);
+  background: var(--as-panel);
+  color: var(--as-text);
+  border: 1px solid var(--as-border);
+  border-radius: var(--as-radius-lg);
   box-shadow: var(--as-shadow);
-  display: grid;
-  grid-template-rows: auto 1fr auto;
-  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden; /* защита от вылезания */
+  z-index: var(--as-z);
+}
+.assistant__panel[hidden] {
+  display: none !important;
 }
 
 /* Шапка */
@@ -67,161 +90,240 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   padding: 12px 14px;
-  border-bottom: 1px solid var(--as-panel-border);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent);
+  background: var(--as-panel-2);
+  border-bottom: 1px solid var(--as-border);
 }
 .assistant__header strong {
   font-weight: 700;
-  color: #fff;
+  letter-spacing: 0.2px;
 }
 .assistant__close {
-  border: 0;
-  background: transparent;
-  color: var(--as-dim);
-  font-size: 20px;
+  appearance: none;
+  border: 1px solid var(--as-border);
+  background: #0e1116;
+  color: var(--as-muted);
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
   cursor: pointer;
 }
 .assistant__close:hover {
-  color: #fff;
+  color: var(--as-text);
 }
 
-/* Лог сообщений */
+/* Лента сообщений */
 .assistant__log {
-  padding: 12px;
+  flex: 1 1 auto;
   overflow: auto;
-  scrollbar-gutter: stable;
-  scrollbar-width: thin;
+  overscroll-behavior: contain;
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+  background: linear-gradient(#0000 0, #0000 12px, #12151b 12px);
 }
+
+/* Сообщения */
 .assistant__msg {
-  max-width: 90%;
+  max-width: 85%;
   padding: 10px 12px;
-  border-radius: 12px;
-  margin: 8px 0;
-  font-size: 14px;
   line-height: 1.35;
-  word-wrap: break-word;
+  border-radius: 14px;
   white-space: pre-wrap;
-}
-.assistant__msg--user {
-  margin-left: auto;
-  background: var(--as-bubble-user-bg);
-  color: var(--as-bubble-user-text);
+  word-wrap: anywhere;
+  border: 1px solid var(--as-border);
+  color: var(--as-text);
 }
 .assistant__msg--bot {
-  margin-right: auto;
-  background: var(--as-bubble-bot-bg);
-  color: var(--as-bubble-bot-text);
-  border: 1px solid rgba(56, 189, 248, 0.25);
+  background: var(--as-bot);
+  justify-self: start;
+}
+.assistant__msg--user {
+  background: var(--as-user);
+  justify-self: end;
 }
 
-/* Панель ввода */
+/* Подсказки / уведомления */
+.assistant__tip {
+  font-size: 0.9em;
+  color: var(--as-muted);
+  text-align: center;
+}
+
+/* Блок управления (поле ввода, кнопки) */
 .assistant__controls {
+  position: sticky;
+  bottom: 0;
   display: grid;
   grid-template-columns: auto 1fr auto;
-  gap: var(--as-gap);
-  padding: 10px;
-  border-top: 1px solid var(--as-panel-border);
-  background: rgba(255, 255, 255, 0.03);
+  gap: 8px;
+  padding: 12px;
+  background: linear-gradient(180deg, #161a20 0%, #12151b 100%);
+  border-top: 1px solid var(--as-border);
 }
+
+/* Микрофон */
 .assistant__mic {
   width: 40px;
   height: 40px;
   border-radius: 10px;
-  border: 1px solid var(--as-panel-border);
-  background: #111827;
-  color: #e5e7eb;
+  border: 1px solid var(--as-border);
+  background: #0e1116;
+  color: var(--as-text);
+  display: grid;
+  place-items: center;
   cursor: pointer;
-  font-size: 18px;
 }
 .assistant__mic.is-on {
-  background: #ef4444;
-  color: #fff;
+  outline: 2px solid var(--as-accent);
+  background: #0c1a21;
 }
+
+/* Поле ввода */
 .assistant__input {
   height: 40px;
-  border-radius: 10px;
   padding: 0 12px;
-  border: 1px solid var(--as-panel-border);
-  background: #0b0b0d;
-  color: #f5f5f7;
+  border-radius: 10px;
+  border: 1px solid var(--as-border);
+  background: #0f1216;
+  color: var(--as-text);
+  width: 100%;
 }
 .assistant__input::placeholder {
-  color: #8f93a1;
+  color: var(--as-muted);
 }
+
+/* Отправка */
 .assistant__send {
+  min-width: 110px;
   height: 40px;
-  padding: 0 12px;
+  padding: 0 14px;
   border-radius: 10px;
-  border: 1px solid var(--as-panel-border);
-  background: #2563eb;
-  color: #fff;
+  border: 1px solid #0d2a33;
+  background: linear-gradient(180deg, #0f3641 0%, #0c252d 100%);
+  color: #dff7ff;
   cursor: pointer;
-  font-weight: 600;
 }
 .assistant__send:hover {
-  filter: brightness(1.1);
+  filter: brightness(1.05);
 }
 
-/* Узкие экраны */
-@media (max-width: 480px) {
-  .assistant {
-    right: 12px;
-    bottom: 12px;
-  }
-  .assistant__panel {
-    right: 12px;
-    bottom: 76px;
-  }
-}
-
-/* Высокий контраст для ultra-dark фонов */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --as-bubble-bot-bg: rgba(56, 189, 248, 0.08);
-  }
-}
-
-/* Voice settings mini panel */
-.assistant__hdrbtns {
-  display: flex;
-  gap: 0.5rem;
+/* ──────────────────────────────────────────────────────────────
+   Настройки (голос, горячая фраза)
+   ────────────────────────────────────────────────────────────── */
+.assistant__settings {
+  padding: 12px;
+  border-top: 1px solid var(--as-border);
+  background: var(--as-panel);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
   align-items: center;
 }
-.assistant__gear {
-  border: 0;
-  background: transparent;
-  cursor: pointer;
-  font-size: 1rem;
-  opacity: 0.8;
+.assistant__settings label {
+  display: grid;
+  gap: 6px;
+  color: var(--as-muted);
+  font-size: 0.95em;
 }
-.assistant__gear:hover {
-  opacity: 1;
+.assistant__settings select {
+  width: 100%;
+  height: 38px;
+  padding: 0 10px;
+  border-radius: 10px;
+  border: 1px solid var(--as-border);
+  background: #0f1216;
+  color: var(--as-text);
+  min-width: 0;
+}
+.assistant__settings .as-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.assistant__settings .as-switch {
+  appearance: none;
+  width: 44px;
+  height: 24px;
+  border-radius: 999px;
+  background: #202636;
+  position: relative;
+  border: 1px solid var(--as-border);
+  cursor: pointer;
+}
+.assistant__settings .as-switch::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #cfd9e6;
+  transition: transform 0.2s ease;
+}
+.assistant__settings .as-switch:checked {
+  background: #0f3a47;
+  border-color: #16576b;
+}
+.assistant__settings .as-switch:checked::after {
+  transform: translateX(20px);
+}
+.assistant__settings .as-btn {
+  height: 38px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--as-border);
+  background: #0e1116;
+  color: var(--as-text);
+  cursor: pointer;
+}
+.assistant__settings .as-btn:hover {
+  color: #fff;
 }
 
-.assistant__settings {
-  display: grid;
-  grid-template-columns: 1fr 140px 140px;
-  gap: 0.75rem;
-  padding: 0.75rem;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(0, 0, 0, 0.2);
+/* ──────────────────────────────────────────────────────────────
+   Доступность и фокусы
+   ────────────────────────────────────────────────────────────── */
+.assistant__panel :focus {
+  outline: 2px solid color-mix(in oklab, var(--as-accent) 70%, #fff 0%);
+  outline-offset: 2px;
 }
-.assistant__settings .as-col {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
+
+/* ──────────────────────────────────────────────────────────────
+   Мобилки/узкие экраны
+   ────────────────────────────────────────────────────────────── */
+@media (max-width: 480px) {
+  .assistant__panel {
+    right: 3vw;
+    bottom: 84px;
+    width: 94vw;
+    max-height: calc(100vh - 100px);
+  }
+  .assistant__settings {
+    grid-template-columns: 1fr; /* в столбик */
+  }
+  .assistant__send {
+    min-width: 92px;
+  }
 }
-.assistant__settings .as-label {
-  font-size: 0.85rem;
-  opacity: 0.9;
+
+/* Страховка от горизонтального скролла всей страницы,
+   если сайт-лейаут «тесный» */
+html,
+body {
+  overflow-x: hidden;
 }
-.assistant__settings select,
-.assistant__settings input[type='range'] {
-  width: 100%;
-  background: #111;
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 0.5rem;
-  padding: 0.4rem 0.5rem;
+
+/* Доп. мелочи */
+.assistant__msg code {
+  background: #101620;
+  border: 1px solid var(--as-border);
+  padding: 0.1em 0.35em;
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.92em;
 }
