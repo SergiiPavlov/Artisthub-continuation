@@ -1,4 +1,6 @@
 // src/js/artists/features/player.js
+/* global YT */
+
 let _instance = null;
 
 /* -------------------- YT API -------------------- */
