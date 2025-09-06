@@ -3,27 +3,44 @@ import js from "@eslint/js";
 import globals from "globals";
 
 export default [
+  // Глобальные игноры
+  { ignores: ["node_modules/**", "dist/**", "reports/**"] },
+
   js.configs.recommended,
+
+  // Браузерный код
   {
-    files: ["src/**/*.js", "vite.config.js"],
+    files: ["src/**/*.js"],
     languageOptions: {
       ecmaVersion: 2023,
       sourceType: "module",
-      // <<< главная фишка: включаем браузерные глобали
       globals: {
-        ...globals.browser,   // window, document, localStorage, fetch, etc.
+        ...globals.browser,
         ...globals.es2021,
-        YT: "readonly"        // YouTube IFrame API, чтобы не ругался
+        YT: "readonly" // YouTube IFrame API
       }
     },
     rules: {
-      // игнор для неиспользуемых аргументов/переменных вида _mode, _e и т.п.
       "no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
-      "no-undef": "error",
-      // много пустых блоков try{}catch{} — не падаем, только предупреждаем
-      "no-empty": ["warn", { "allowEmptyCatch": true }],
-      // если хочешь — можно выключить придирки к console:
+      "no-empty": ["warn", { allowEmptyCatch: true }]
       // "no-console": "off"
+    }
+  },
+
+  // Конфиги/скрипты Node
+  {
+    files: ["vite.config.js", "*.cjs"],
+    languageOptions: {
+      ecmaVersion: 2023,
+      sourceType: "module",
+      globals: {
+        ...globals.node, // даст process, __dirname и т.д.
+        ...globals.es2021
+      }
+    },
+    rules: {
+      // хотим — оставляем строгий режим
+      // "no-undef": "error"
     }
   }
 ];

@@ -1,12 +1,13 @@
 {
   "compilerOptions": {
     "checkJs": true,
+    "allowJs": true,
     "module": "es2022",
     "target": "es2022",
     "moduleResolution": "bundler",
-    "strictNullChecks": true
+    "strictNullChecks": true,
+    "types": ["node"]
   },
-  "include": [
-    "src"
-  ]
+  "include": ["src", "vite.config.js", "types"],
+  "exclude": ["node_modules", "dist", "reports"]
 }
