@@ -3,44 +3,35 @@ import js from "@eslint/js";
 import globals from "globals";
 
 export default [
-  // Глобальные игноры
-  { ignores: ["node_modules/**", "dist/**", "reports/**"] },
+  // Игнор мусора/сборок
+  { ignores: ["dist/**", "reports/**", "node_modules/**"] },
 
+  // База
   js.configs.recommended,
 
-  // Браузерный код
+  // Конфиги (Node окружение)
   {
-    files: ["src/**/*.js"],
+    files: ["vite.config.js", "postcss.config.cjs", "eslint.config.js"],
     languageOptions: {
-      ecmaVersion: 2023,
+      ecmaVersion: 2022,
       sourceType: "module",
-      globals: {
-        ...globals.browser,
-        ...globals.es2021,
-        YT: "readonly" // YouTube IFrame API
-      }
-    },
-    rules: {
-      "no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
-      "no-empty": ["warn", { allowEmptyCatch: true }]
-      // "no-console": "off"
+      globals: { ...globals.node }
     }
   },
 
-  // Конфиги/скрипты Node
+  // Исходники (браузер)
   {
-    files: ["vite.config.js", "*.cjs"],
+    files: ["src/**/*.js"],
     languageOptions: {
-      ecmaVersion: 2023,
+      ecmaVersion: 2022,
       sourceType: "module",
-      globals: {
-        ...globals.node, // даст process, __dirname и т.д.
-        ...globals.es2021
-      }
+      globals: { ...globals.browser }
     },
     rules: {
-      // хотим — оставляем строгий режим
-      // "no-undef": "error"
+      "no-undef": "error",
+      "no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
+      // В проекте много легитимных пустых catch — не считаем их ошибкой
+      "no-empty": ["warn", { allowEmptyCatch: true }]
     }
   }
 ];
