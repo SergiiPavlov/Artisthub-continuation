@@ -18,23 +18,19 @@ function loadYTAPI() {
   return loadYTAPI._p;
 }
 
-/* -------------------- helpers -------------------- */
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
-const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
-
 function getYouTubeId(urlOrId) {
   if (!urlOrId) return "";
   if (/^[\w-]{11}$/.test(urlOrId)) return urlOrId;
   try {
     const u = new URL(urlOrId, location.href);
-    if (/youtu\.be$/i.test(u.hostname)) return u.pathname.slice(1);
-    const v = u.searchParams.get("v");
-    if (v) return v;
-    const m = u.pathname.match(/\/(?:embed|shorts|v)\/([^/?#]+)/i);
-    return m ? m[1] : "";
+    if (/youtu\.be$/.test(u.hostname)) return u.pathname.slice(1);
+    if (u.searchParams.get("v")) return u.searchParams.get("v");
+    const m = u.pathname.match(/\/(embed|shorts|v)\/([^/?#]+)/);
+    return m ? m[2] : "";
   } catch { return ""; }
 }
-
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const shuffleArr = (arr) => {
   const a = arr.slice();
   for (let i = a.length - 1; i > 0; i--) {
@@ -43,7 +39,6 @@ const shuffleArr = (arr) => {
   }
   return a;
 };
-
 function fmtTimeSec(sec) {
   sec = Math.max(0, Math.round(Number(sec) || 0));
   const m = Math.floor(sec / 60);
@@ -51,17 +46,21 @@ function fmtTimeSec(sec) {
   return `${m}:${s}`;
 }
 
-/* -------------------- простой «чёрный список» ID -------------------- */
-const BAD_KEY = "am.radio.bad";
-function readBad() { try { return new Set(JSON.parse(localStorage.getItem(BAD_KEY) || "[]")); } catch { return new Set(); } }
-function addBad(id) {
+/* ---------- Blacklist of bad/non-embeddable IDs ---------- */
+const LS_KEY_BAD = "am.radio.bad";
+function addBadId(id) {
   try {
-    const s = readBad(); s.add(id);
-    const arr = Array.from(s).slice(-400);
-    localStorage.setItem(BAD_KEY, JSON.stringify(arr));
+    if (!id) return;
+    const raw = localStorage.getItem(LS_KEY_BAD) || "[]";
+    let arr = [];
+    try { arr = JSON.parse(raw) || []; } catch {}
+    if (!arr.includes(id)) {
+      arr.push(id);
+      if (arr.length > 1000) arr = arr.slice(-1000);
+      localStorage.setItem(LS_KEY_BAD, JSON.stringify(arr));
+    }
   } catch {}
 }
-function isBad(id) { return readBad().has(id); }
 
 /* -------------------- Экспорт: фабрика singleton -------------------- */
 export function createMiniPlayer() {
@@ -130,7 +129,8 @@ export function createMiniPlayer() {
 
   let queue = [];
   let qi = -1;
-  let loop = true;     // крутим очередь по кругу
+  let loop = false;
+  let currentId = null;
 
   const DOCK_KEY = "amPlayerPos";
   let dockDrag = null;
@@ -140,7 +140,7 @@ export function createMiniPlayer() {
   let bubbleStart = null;
   let _bubblePos = null;
 
-  // игнор клика сразу после drag
+  // NEW: игнор клика сразу после drag
   let recentBubbleDrag = false;
 
   let watchdogId = null;
@@ -161,13 +161,20 @@ export function createMiniPlayer() {
       bubble.innerHTML = `<span class="note">♪</span>`;
       document.body.appendChild(bubble);
 
+      // ▼▼▼ ПАТЧ: открывать только по «чистому» клику
       bubble.addEventListener("click", (e) => {
-        if (recentBubbleDrag) { recentBubbleDrag = false; e.preventDefault(); e.stopPropagation(); return; }
+        if (recentBubbleDrag) {
+          recentBubbleDrag = false;
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
         uiMin(false);
       });
+
       bubble.addEventListener("pointerdown", (e) => {
         bubbleDragging = false;
-        recentBubbleDrag = false;
+        recentBubbleDrag = false;            // сбрасываем маркер
         try { bubble.setPointerCapture(e.pointerId); } catch {}
         const r = bubble.getBoundingClientRect();
         bubbleStart = { x: e.clientX, y: e.clientY, left: r.left, top: r.top };
@@ -182,6 +189,7 @@ export function createMiniPlayer() {
       });
       bubble.addEventListener("pointerup", (e) => {
         try { bubble.releasePointerCapture(e.pointerId); } catch {}
+        // если был drag — помечаем, чтобы следующий click проигнорить
         recentBubbleDrag = !!bubbleDragging;
         bubbleStart = null;
         bubbleDragging = false;
@@ -200,8 +208,15 @@ export function createMiniPlayer() {
     restoreBubblePos(useSaved);
   }
   function hideBubble() { if (bubble) bubble.style.display = "none"; }
-  function setBubblePulse(isPlaying) { bubble?.classList.toggle("is-paused", !isPlaying); }
-  function setBubbleAmp(v) { bubble?.style.setProperty("--amp", (1.02 + (Math.max(0, Math.min(100, v)) / 100) * 0.08).toFixed(3)); }
+  function setBubblePulse(isPlaying) {
+    if (!bubble) return;
+    bubble.classList.toggle("is-paused", !isPlaying);
+  }
+  function setBubbleAmp(v) {
+    if (!bubble) return;
+    const amp = 1.02 + (Math.max(0, Math.min(100, v)) / 100) * 0.08;
+    bubble.style.setProperty("--amp", amp.toFixed(3));
+  }
   function clampBubbleToViewport(margin = 8) {
     if (!bubble || bubble.style.display === "none") return;
     const w = window.innerWidth, h = window.innerHeight;
@@ -250,12 +265,18 @@ export function createMiniPlayer() {
 
   function uiShow(on) {
     dock.classList.toggle("am-player--active", !!on);
+    // ВАЖНО: когда активен мини-режим, пузырь должен оставаться видимым
     const isMin = dock.classList.contains("am-player--min");
-    if (on) { if (!isMin) hideBubble(); } else { hideBubble(); }
+    if (on) {
+      if (!isMin) hideBubble();
+    } else {
+      hideBubble();
+    }
   }
   function uiMin(on) {
     dock.classList.toggle("am-player--min", !!on);
-    if (on) showBubble(true); else hideBubble();
+    if (on) showBubble(true);
+    else hideBubble();
   }
 
   function uiSetTime(cur, dur) {
@@ -289,10 +310,7 @@ export function createMiniPlayer() {
       yt = new YT.Player("am-player-yt", {
         host: "https://www.youtube-nocookie.com",
         videoId: id,
-        playerVars: {
-          autoplay: 1, rel: 0, modestbranding: 1, controls: 1, enablejsapi: 1,
-          playsinline: 1, origin: location.origin
-        },
+        playerVars: { autoplay: 1, rel: 0, modestbranding: 1, controls: 1, enablejsapi: 1, origin: location.origin },
         events: {
           onReady: () => {
             ready = true;
@@ -306,13 +324,12 @@ export function createMiniPlayer() {
             startTimer();
 
             clearWatchdog();
-            // если по какой-то причине не стартовало — перескочим
             watchdogId = setTimeout(() => {
               try {
-                const st = yt?.getPlayerState?.();
-                if (st !== YT.PlayerState.PLAYING) {
+                if (yt && yt.getPlayerState && yt.getPlayerState() !== YT.PlayerState.PLAYING) {
+                  console.warn("Watchdog: video didn’t start — skip.");
+                  if (currentId) addBadId(currentId);
                   setBubblePulse(false);
-                  addBad(id);     // пометим проблемным
                   skipWithDelay(0);
                 }
               } catch {}
@@ -336,14 +353,13 @@ export function createMiniPlayer() {
               autoNext();
             }
           },
-          onError: (e) => {
-            // 101/150 — запрещено встраивание; 100 — удалено; 2/5 — неверный id/формат
-            try { addBad(id); } catch {}
+          onError: () => {
+            if (currentId) addBadId(currentId);
             uiPlayIcon(false);
             setBubblePulse(false);
             clearTimer();
             clearWatchdog();
-            skipWithDelay(500);
+            skipWithDelay(1200);
           }
         }
       });
@@ -355,19 +371,25 @@ export function createMiniPlayer() {
     if (!queue.length) return;
     qi = clamp(idx, 0, queue.length - 1);
     const id = queue[qi];
-    if (!id || !/^[\w-]{11}$/.test(id) || isBad(id)) {
+    currentId = id;
+    if (!id || !/^[\w-]{11}$/.test(id)) {
+      console.warn("Bad YouTube ID, skip:", id);
       return skipWithDelay(0);
     }
-
     aYTlink.href = `https://www.youtube.com/watch?v=${id}`;
 
+    // NEW: управляем раскрытием
     const reveal = opts.reveal ?? true;
-    if (reveal) { uiMin(false); uiShow(true); restoreDockPos(); }
-    else { if (!dock.classList.contains("am-player--active")) uiShow(true); }
+    if (reveal) {
+      uiMin(false);
+      uiShow(true);
+      restoreDockPos();
+    } else {
+      if (!dock.classList.contains("am-player--active")) uiShow(true);
+    }
 
     ready = false; duration = 0; clearTimer(); clearWatchdog();
-    try { await ensureYT(id); }
-    catch { skipWithDelay(500); }
+    try { await ensureYT(id); } catch (err) { skipWithDelay(1200); }
   }
 
   function autoNext() {
@@ -376,7 +398,7 @@ export function createMiniPlayer() {
     else if (loop) playByIndex(0, { reveal: false });
   }
 
-  /* ---------- Перетаскивание ДОКА ---------- */
+  /* ---------- Перетаскивание ДОКА (как было) ---------- */
   function getVP() {
     const w = window.visualViewport?.width || document.documentElement.clientWidth || window.innerWidth;
     const h = window.visualViewport?.height || document.documentElement.clientHeight || window.innerHeight;
@@ -461,7 +483,6 @@ export function createMiniPlayer() {
     queue = []; qi = -1;
     setBubblePulse(false);
   });
-
   btnHide.addEventListener("click", () => { uiMin(true); });
 
   aYTlink.addEventListener("click", () => {
@@ -509,17 +530,17 @@ export function createMiniPlayer() {
     yt.seekTo?.(sec, true);
   });
 
-  /* ---------- Публичное API (добавлены play/pause/stop/volume) ---------- */
+  /* ---------- Публичное API ---------- */
   async function open(urlOrId) {
     const id = getYouTubeId(urlOrId);
-    if (!id || isBad(id)) return;
+    if (!id) return;
     queue = [id]; qi = 0;
     uiMin(false); uiShow(true); restoreDockPos();
     await playByIndex(0, { reveal: true });
   }
 
   async function openQueue(list, opts = {}) {
-    const ids = (list || []).map(getYouTubeId).filter(id => id && !isBad(id));
+    const ids = (list || []).map(getYouTubeId).filter(Boolean);
     if (!ids.length) return;
     loop = !!opts.loop;
     const arr = opts.shuffle ? shuffleArr(ids) : ids.slice();
@@ -529,17 +550,7 @@ export function createMiniPlayer() {
     await playByIndex(start, { reveal: true });
   }
 
-  function play() {
-    if (yt && ready) { yt.playVideo?.(); uiPlayIcon(true); setBubblePulse(true); }
-  }
-  function pause() {
-    if (yt && ready) { yt.pauseVideo?.(); uiPlayIcon(false); setBubblePulse(false); }
-  }
-  function stop() {
-    try { yt?.stopVideo?.(); } catch {}
-    uiPlayIcon(false); setBubblePulse(false);
-  }
-
+  // ВАЖНО: next/prev без параметров — НЕ РАСКРЫВАЮТ плеер, если он свёрнут.
   function next() {
     if (!queue.length) return;
     const reveal = !dock.classList.contains("am-player--min");
@@ -551,27 +562,41 @@ export function createMiniPlayer() {
     playByIndex(qi > 0 ? qi - 1 : (loop ? queue.length - 1 : 0), { reveal });
   }
 
-  function setVolume(v) {
-    v = clamp(Number(v), 0, 1);
-    volVal = Math.round(v * 100);
-    vol.value = String(volVal);
-    if (!isIOS) yt?.setVolume?.(volVal);
-    if (volVal === 0 && !muted) { muted = true; yt?.mute?.(); uiMuteIcon(true); }
-    else if (volVal > 0 && muted) { muted = false; yt?.unMute?.(); uiMuteIcon(false); }
-    setBubbleAmp(volVal);
-  }
-  function getVolume() { return (volVal || 0) / 100; }
-
   function isActive()     { return dock.classList.contains("am-player--active"); }
   function isMinimized()  { return isActive() && dock.classList.contains("am-player--min"); }
   function hasQueue()     { return Array.isArray(queue) && queue.length > 0; }
   function minimize()     { if (isActive()) uiMin(true); }
   function close()        { btnClose.click(); }
 
-  _instance = {
-    open, openQueue, play, pause, stop, next, prev,
-    setVolume, getVolume,
-    minimize, isActive, isMinimized, hasQueue, close
-  };
+  /* ---------- Public control helpers ---------- */
+  function play() {
+    if (!ready || !yt) return;
+    try { yt.playVideo?.(); } catch {}
+    uiPlayIcon(true); setBubblePulse(true);
+  }
+  function pause() {
+    if (!yt) return;
+    try { yt.pauseVideo?.(); } catch {}
+    uiPlayIcon(false); setBubblePulse(false);
+  }
+  function stop() {
+    if (!yt) return;
+    try { yt.stopVideo?.(); } catch {}
+    uiPlayIcon(false); setBubblePulse(false); clearTimer(); clearWatchdog();
+  }
+  function setVolume01(x) {
+    const v01 = Math.max(0, Math.min(1, Number(x) || 0));
+    volVal = Math.round(v01 * 100);
+    vol.value = String(volVal);
+    if (!isIOS) yt?.setVolume?.(volVal);
+    if (volVal === 0 && !muted) { muted = true; yt?.mute?.(); uiMuteIcon(true); }
+    else if (volVal > 0 && muted) { muted = false; yt?.unMute?.(); uiMuteIcon(false); }
+    setBubbleAmp(volVal);
+  }
+  function getVolume01() {
+    return Math.max(0, Math.min(1, (Number(volVal) || 0) / 100));
+  }
+
+  _instance = { open, openQueue, next, prev, minimize, isActive, isMinimized, hasQueue, close, play, pause, stop, setVolume: setVolume01, getVolume: getVolume01 };
   return _instance;
 }

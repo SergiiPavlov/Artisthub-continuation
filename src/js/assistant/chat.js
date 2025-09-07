@@ -1,4 +1,4 @@
-/* Chat Friend + AI bridge with memory */
+/* Chat Friend + AI bridge with memory + Provider + Optional server TTS (Piper) */
 (() => {
   const API_BASE =
     (import.meta?.env?.VITE_API_URL && import.meta.env.VITE_API_URL.replace(/\/+$/, "")) ||
@@ -30,6 +30,16 @@
         <strong>Чат-друг</strong>
         <div class="assistant__hdr-actions">
           <span class="assistant__ai-badge">${API_BASE ? "AI" : ""}</span>
+
+          <label class="assistant__prov-wrap" title="Режим ИИ">
+            <span class="assistant__prov-label">Режим</span>
+            <select id="as-provider">
+              <option value="auto">Auto</option>
+              <option value="free">Free</option>
+              <option value="pro">Pro</option>
+            </select>
+          </label>
+
           <button class="assistant__gear" aria-label="Настройки">⚙️</button>
           <button class="assistant__close" aria-label="Закрыть">✕</button>
         </div>
@@ -45,15 +55,29 @@
           <span>Голос озвучки</span>
           <select id="as-voice"></select>
         </label>
+
+        <label class="assistant__row">
+          <span>Серверный TTS (Piper)</span>
+          <input id="as-tts-server" type="checkbox" />
+          <small class="assistant__hint">Нужно настроить /api/tts на сервере. Иначе будет браузерный голос.</small>
+        </label>
+
         <div class="assistant__row">
           <button id="as-test-voice" type="button">Проба голоса</button>
           <button id="as-clear-log" type="button">Очистить чат</button>
+        </div>
+
+        <div class="assistant__row">
+          <small class="assistant__hint">
+            Подсказка: в Microsoft Edge доступны более естественные голоса (SpeechSynthesis).
+            На Windows можно поставить дополнительные языковые пакеты — появятся новые голоса.
+          </small>
         </div>
       </div>
     </div>`;
   document.body.appendChild(root);
 
-  // quick styles
+  // quick styles (не трогаю ваш общий chat.css)
   const style = document.createElement("style");
   style.textContent = `
     .assistant{position:fixed;right:18px;bottom:18px;z-index:9999}
@@ -62,6 +86,8 @@
     .assistant__header{display:flex;align-items:center;gap:.75rem;padding:.8rem 1rem;background:linear-gradient(180deg,#121821,#0e1318);border-bottom:1px solid rgba(255,255,255,.06)}
     .assistant__hdr-actions{margin-left:auto;display:flex;gap:.5rem;align-items:center}
     .assistant__ai-badge{font:600 12px/1.2 ui-sans-serif,system-ui,Segoe UI,Arial;color:#9ae6b4;background:#203021;border:1px solid #2b4a2d;padding:.25rem .4rem;border-radius:6px}
+    .assistant__prov-wrap{display:flex;align-items:center;gap:.35rem;color:#cbd5e1}
+    .assistant__prov-wrap select{background:#0b0f14;border:1px solid #263142;color:#e8f1ff;border-radius:8px;padding:.2rem .35rem}
     .assistant__close,.assistant__gear{background:none;border:1px solid rgba(255,255,255,.14);color:#cbd5e1;width:32px;height:32px;border-radius:8px;cursor:pointer}
     .assistant__log{padding:10px 12px;overflow:auto;display:flex;flex-direction:column;gap:8px;height:360px}
     .assistant__msg{padding:.6rem .9rem;border-radius:12px;max-width:85%;white-space:pre-wrap}
@@ -76,21 +102,24 @@
     .assistant__settings{padding:.75rem;border-top:1px solid rgba(255,255,255,.08);background:#0f1216}
     .assistant__row{display:flex;align-items:center;gap:.5rem;margin:.45rem 0}
     .assistant__row > span{min-width:150px;opacity:.85}
+    .assistant__hint{opacity:.7}
     #as-voice{flex:1;min-width:0;padding:.45rem .55rem;border-radius:8px;background:#0b0f14;border:1px solid #263142;color:#e8f1ff}
   `;
   document.head.appendChild(style);
 
-  const panel = root.querySelector(".assistant__panel");
-  const btnOpen = root.querySelector(".assistant__toggle");
+  const panel    = root.querySelector(".assistant__panel");
+  const btnOpen  = root.querySelector(".assistant__toggle");
   const btnClose = root.querySelector(".assistant__close");
-  const btnGear = root.querySelector(".assistant__gear");
-  const logEl = root.querySelector("#assistantLog");
-  const inputEl = root.querySelector(".assistant__input");
-  const btnSend = root.querySelector(".assistant__send");
-  const btnMic = root.querySelector(".assistant__mic");
+  const btnGear  = root.querySelector(".assistant__gear");
+  const logEl    = root.querySelector("#assistantLog");
+  const inputEl  = root.querySelector(".assistant__input");
+  const btnSend  = root.querySelector(".assistant__send");
+  const btnMic   = root.querySelector(".assistant__mic");
   const selVoice = root.querySelector("#as-voice");
-  const btnTest = root.querySelector("#as-test-voice");
-  const btnClr = root.querySelector("#as-clear-log");
+  const selProv  = root.querySelector("#as-provider");
+  const chkTTS   = root.querySelector("#as-tts-server");
+  const btnTest  = root.querySelector("#as-test-voice");
+  const btnClr   = root.querySelector("#as-clear-log");
 
   // --- memory (короткая) ---
   const chat = {
@@ -100,13 +129,34 @@
     lastMood: null
   };
 
-  // TTS
+  // --- Provider pref ---
+  const provPref = localStorage.getItem('assistant.provider') || 'auto';
+  selProv.value = provPref;
+  selProv.addEventListener('change', () => {
+    localStorage.setItem('assistant.provider', selProv.value);
+    log(`Режим: ${selProv.value === 'pro' ? 'Pro (OpenAI)' : selProv.value === 'free' ? 'Free (локально)' : 'Auto'}`, 'note');
+  });
+  function providerToSend() {
+    const p = localStorage.getItem('assistant.provider') || 'auto';
+    if (p === 'pro')  return 'openai';
+    if (p === 'free') return 'lmstudio'; // по умолчанию БЕСПЛАТНЫЙ — LM Studio
+    return undefined; // auto = пусть решает сервер (env PROVIDER)
+  }
+
+  // --- Server TTS pref ---
+  chkTTS.checked = localStorage.getItem('assistant.ttsServer') === '1';
+  chkTTS.addEventListener('change', () => {
+    localStorage.setItem('assistant.ttsServer', chkTTS.checked ? '1' : '0');
+    log(chkTTS.checked ? 'Серверный TTS включён' : 'Серверный TTS выключен', 'note');
+  });
+
+  // --- TTS ---
   const tts = { voiceName: localStorage.getItem("assistant.voice") || "" };
   function populateVoices() {
     try {
       const V = window.speechSynthesis?.getVoices?.() || [];
       selVoice.innerHTML =
-        `<option value="">Системный</option>` +
+        `<option value="">Системный / лучший доступный</option>` +
         V.map(v => `<option value="${v.name}">${v.name} — ${v.lang}</option>`).join("");
       if (tts.voiceName) selVoice.value = tts.voiceName;
     } catch {}
@@ -115,7 +165,27 @@
     try { window.speechSynthesis.onvoiceschanged = populateVoices; } catch {}
     setTimeout(populateVoices, 300);
   }
-  function speak(text) {
+  selVoice?.addEventListener("change", () => {
+    tts.voiceName = selVoice.value || "";
+    localStorage.setItem("assistant.voice", tts.voiceName);
+    speak("Голос выбран");
+  });
+
+  async function speakServer(text) {
+    if (!API_BASE) throw new Error('no API');
+    const r = await fetch(`${API_BASE}/api/tts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text })
+    });
+    if (!r.ok) throw new Error('tts unavailable');
+    const blob = await r.blob();
+    const url  = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    audio.play().catch(() => {});
+  }
+
+  function speakBrowser(text) {
     try {
       if (!("speechSynthesis" in window)) return;
       const u = new SpeechSynthesisUtterance(text);
@@ -130,11 +200,16 @@
       window.speechSynthesis.speak(u);
     } catch {}
   }
-  selVoice?.addEventListener("change", () => {
-    tts.voiceName = selVoice.value || "";
-    localStorage.setItem("assistant.voice", tts.voiceName);
-    speak("Голос выбран");
-  });
+
+  function speak(text) {
+    const useServer = chkTTS.checked && !!API_BASE;
+    if (useServer) {
+      speakServer(text).catch(() => speakBrowser(text));
+    } else {
+      speakBrowser(text);
+    }
+  }
+
   btnTest?.addEventListener("click", () => speak("Привет! Я твой голосовой друг."));
   btnClr?.addEventListener("click", () => { logEl.innerHTML = ""; chat.history = []; });
 
@@ -147,7 +222,7 @@
     logEl.scrollTop = logEl.scrollHeight;
 
     chat.history.push({ role: who === 'user' ? 'user' : 'assistant', content: text });
-    chat.history = chat.history.slice(-10); // ограничим память на клиенте
+    chat.history = chat.history.slice(-10);
   }
 
   function dispatch(name, detail = {}) {
@@ -181,7 +256,6 @@
     const urlRe = /\bhttps?:\/\/(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([A-Za-z0-9_-]{11})\b/g;
     let m;
     while ((m = urlRe.exec(txt))) ids.add(m[1]);
-    // просто на всякий — пробуем 11-символьные токены
     const idRe = /\b([A-Za-z0-9_-]{11})\b/g;
     while ((m = idRe.exec(txt))) ids.add(m[1]);
     return Array.from(ids);
@@ -190,7 +264,7 @@
   // локальные команды (fallback)
   function handleCommandLocal(t) {
     const text = (t || "").toLowerCase();
-    const wantsPlay = /включ|поставь|play|запуств|запусти/.test(text);
+    const wantsPlay = /включ|поставь|play|запусти|запуств/.test(text);
 
     if (/list|список|лист ?вью/.test(text)) { dispatch("view", { mode: "list" }); return "Включаю список"; }
     if (/grid|сетка|карточк/.test(text))   { dispatch("view", { mode: "grid" }); return "Включаю сетку"; }
@@ -202,13 +276,11 @@
     if (/громче|louder|volume up|погромче/.test(text))  { dispatch("volume", { delta: +0.1 }); return "Громче"; }
     if (/(mix ?radio|микс|радио|random)/.test(text))    { dispatch("mixradio", { start: true }); return "Mix Radio"; }
 
-    // «включи из этого списка»
     if (/из (этого|того) списка|из предложенного|любой из списка/.test(text)) {
       if (chat.lastIds.length) {
         dispatch("play", { id: chat.lastIds[0] });
         return "Запускаю из последнего списка";
       }
-      // если совсем нечего — запустим что-то приятное
       dispatch("mixradio", { start: true });
       return "Включаю из своих рекомендаций";
     }
@@ -236,13 +308,17 @@
   // API
   async function callAI(message) {
     if (!API_BASE) return null;
-    const res = await fetch(`${API_BASE}/api/chat`, {
+    const r = await fetch(`${API_BASE}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, history: chat.history })
+      body: JSON.stringify({
+        message,
+        history: chat.history,
+        provider: providerToSend()
+      })
     });
-    if (!res.ok) throw new Error(`API ${res.status}`);
-    return res.json();
+    if (!r.ok) throw new Error(`API ${r.status}`);
+    return r.json();
   }
 
   async function handleUserText(text) {
@@ -254,7 +330,6 @@
     try {
       const data = await callAI(v);
       if (data && data.reply) {
-        // сохраняем кандидатов из текста
         const harvested = harvestIdsFromReply(data.reply);
         if (harvested.length) chat.lastIds = harvested;
 
@@ -263,14 +338,12 @@
 
         const actions = Array.isArray(data.actions) ? data.actions : [];
         if (actions.length) {
-          // если в actions есть play с id — перепишем lastIds
           const aPlay = actions.find(a => a.type === 'play' && (a.id || a.query));
           if (aPlay) {
             const id = getYouTubeId(aPlay.id || aPlay.query);
             if (id) chat.lastIds = [id];
           }
         }
-        // выполнить
         runActions(actions.length ? actions : []);
 
         if (data.explain) log("[" + data.explain + "]", "note");
