@@ -25,3 +25,6 @@ dist-ssr
 
 # local archives
 *.zip
+
+# secrets
+.env

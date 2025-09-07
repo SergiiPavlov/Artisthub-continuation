@@ -200,7 +200,6 @@ function bindAssistantToCatalog(player) {
     }
 
     // mood/decade — под твой реальный маппинг тегов/чекбоксов
-    // После выставления фильтров можно дёрнуть свою refresh():
     // try { refresh(); } catch {}
   });
 
@@ -226,6 +225,15 @@ function bindAssistantToCatalog(player) {
       player.setVolume(v);
     }
   }));
+
+  // НОВОЕ: прямой запуск по id/URL (если ассистент прислал такое)
+  document.addEventListener("assistant:play", (e) => {
+    const { id, query } = e.detail || {};
+    const target = id || getYouTubeId(query);
+    if (target && typeof player?.openQueue === "function") {
+      player.openQueue([target], { shuffle: false, loop: true, startIndex: 0 });
+    }
+  });
 }
 
 /* =========================
@@ -233,11 +241,18 @@ function bindAssistantToCatalog(player) {
    ========================= */
 
 document.addEventListener("DOMContentLoaded", () => {
-  // Инициализация секции/грида/модалок (как было)
   try { initArtists(); } catch { /* ignore */ }
 
   // Создаём мини-плеер
-  const player = (typeof createMiniPlayer === "function") ? createMiniPlayer() : null;
+  const player =
+    (typeof createMiniPlayer === "function") ? createMiniPlayer() : null;
+
+  // НОВОЕ: сделать плеер глобальным для моста/модалки
+  if (player) {
+    window.AM = window.AM || {};
+    window.AM.player = player;
+    document.dispatchEvent(new CustomEvent("am:player-ready", { detail: { player } }));
+  }
 
   // Патч — строго после создания плеера
   try { if (player) mountPlayerPatch(player); } catch { /* ignore */ }
@@ -252,17 +267,14 @@ document.addEventListener("DOMContentLoaded", () => {
       e.preventDefault();
       if (!player) return;
 
-      // Если свернут (пузырь) — просто next, не раскрывая плеер
       if (player.isMinimized?.()) { player.next?.(); return; }
 
-      // Если ещё не активен — стартуем радио или next по готовой очереди
       if (!player.isActive?.()) {
         if (player.hasQueue?.()) player.next?.();
         else startMixRadio(player);
         return;
       }
 
-      // Если активен — просто next
       player.next?.();
     });
   }

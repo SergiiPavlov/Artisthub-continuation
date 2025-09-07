@@ -1,4 +1,3 @@
-// src/js/artists/features/modal.js
 import { lockScroll, unlockScroll } from "../lib/scroll-lock.js";
 import { UISound } from "../lib/sound.js";
 import { fetchArtist, fetchArtistAlbums } from "./api.js";
@@ -6,7 +5,6 @@ import { createMiniPlayer } from "./player.js";
 import { openZoom } from "./zoom.js";
 import { getPrefetched } from "./prefetch.js";
 
-// === SPRITE: инлайн, как в grid.js (id-only, без путей) ===
 import SPRITE_RAW from "../../../img/sprite.svg?raw";
 const SPRITE_CONTAINER_ID = "GLOBAL_SVG_SPRITE";
 function ensureSpriteMounted(doc = document) {
@@ -24,7 +22,6 @@ function ensureSpriteMounted(doc = document) {
 const icon = (id, cls = "ico") =>
   `<svg class="${cls}" aria-hidden="true"><use href="#${id}" xlink:href="#${id}"></use></svg>`;
 
-// Плейсхолдер фото без сетевых запросов → никаких 404 в консоли
 const FALLBACK_IMG =
   "data:image/svg+xml;utf8," +
   encodeURIComponent(
@@ -35,7 +32,7 @@ const FALLBACK_IMG =
     </svg>`
   );
 
-/* ---------- ensure modal shell (если partial не вставлен) ---------- */
+/* ---------- ensure modal shell ---------- */
 function ensureModalShell(doc = document) {
   let modal = doc.querySelector("#artist-modal");
   if (modal) return modal;
@@ -91,13 +88,11 @@ function trackRow(t = {}) {
 }
 function dedupe(arr){const s=new Set(),r=[];for(const x of arr){if(x&&!s.has(x)){s.add(x);r.push(x)}}return r;}
 function isMixRadioOn(){
-  // индикатор MixRadio — подстрой под свой markup при желании
   return !!document.querySelector('#random-radio[aria-pressed="true"], .toolbar__mixradio.is-active, body.mixradio-on');
 }
 
 /* ----------------- main ----------------- */
 export function createArtistModal(rootEl = document) {
-  // смонтировать спрайт (идемпотентно)
   ensureSpriteMounted(document);
 
   const modal =
@@ -109,8 +104,16 @@ export function createArtistModal(rootEl = document) {
   const modalClose = modal.querySelector("#am-close");
   const dialog     = modal.querySelector(".amodal__dialog");
 
-  // единый мини-плеер для сайта
-  const player = createMiniPlayer();
+  // ЕДИНЫЙ мини-плеер для сайта:
+  // 1) используем уже созданный глобально в index.js
+  // 2) если его ещё нет (например, модалку открыли раньше) — создаём и регистрируем
+  let player = (window.AM && window.AM.player) || null;
+  if (!player) {
+    player = createMiniPlayer();
+    window.AM = window.AM || {};
+    window.AM.player = player;
+    document.dispatchEvent(new CustomEvent("am:player-ready", { detail: { player } }));
+  }
 
   // Scroll-to-top в диалоге
   let scrollTopBtn = null;
@@ -161,7 +164,6 @@ export function createArtistModal(rootEl = document) {
     placeScrollTop();
   }
 
-  // -------- open/close --------
   const onEsc = (e) => { if (e.key === "Escape") { try { UISound?.tap?.(); } catch {} close(); } };
 
   function open() {
@@ -204,7 +206,6 @@ export function createArtistModal(rootEl = document) {
       e.preventDefault();
       try { UISound?.tap?.(); } catch {}
 
-      // собираем ВСЕ треки в модалке, делаем очередь
       const links = Array.from(modal.querySelectorAll("a.yt"));
       const hrefs = dedupe(links.map((x) => x.href).filter(Boolean));
       let start = hrefs.indexOf(a.href);
@@ -228,9 +229,7 @@ export function createArtistModal(rootEl = document) {
     }
   });
 
-  // -------- render --------
   async function render(artistId) {
-    // префетч-кэш (если навели курсор заранее)
     const cached = getPrefetched?.(String(artistId));
 
     const [artist, albums] = await Promise.all([
@@ -296,7 +295,6 @@ export function createArtistModal(rootEl = document) {
       </div>`;
   }
 
-  // -------- public API --------
   async function openFor(id) {
     try { UISound?.tap?.(); } catch {}
     open();
