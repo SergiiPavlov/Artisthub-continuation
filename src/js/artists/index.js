@@ -1,6 +1,7 @@
 // --------------------------------------------------
 // Artists: точка входа
 // --------------------------------------------------
+
 import { initArtists } from "./features/init.js";
 import { createMiniPlayer } from "./features/player.js";
 import mountPlayerPatch from "./features/player-patch.js";
@@ -10,17 +11,34 @@ import { installMixRadioMenu } from "./features/mixradio-menu.js";
    Утилиты
    ========================= */
 
+// Замена «похожих» кириллических символов на латиницу (частая причина битых ID)
+function normalizeIdLikeString(s = "") {
+  const map = {
+    "А":"A","В":"B","Е":"E","К":"K","М":"M","Н":"H","О":"O","Р":"P","С":"S","Т":"T","Х":"X","а":"a","е":"e","о":"o","р":"p","с":"s","х":"x",
+  };
+  return String(s).replace(/[АВЕКМНОРСТХаеорсх]/g, ch => map[ch] || ch);
+}
+
+/** Достаёт YouTube ID из ID или URL (youtu.be, /embed, /shorts, ?v=) */
 function getYouTubeId(urlOrId) {
   if (!urlOrId) return "";
-  if (/^[\w-]{11}$/.test(urlOrId)) return urlOrId;
+  const raw = normalizeIdLikeString(urlOrId).trim();
+
+  // уже ID?
+  if (/^[\w-]{11}$/.test(raw)) return raw;
+
+  // пытаемся как URL
   try {
-    const u = new URL(urlOrId, location.href);
-    if (/youtu\.be$/i.test(u.hostname)) return u.pathname.slice(1);
+    const u = new URL(raw, location.href);
+    if (/youtu\.be$/i.test(u.hostname)) {
+      const id = (u.pathname || "").slice(1);
+      return /^[\w-]{11}$/.test(id) ? id : "";
+    }
     const v = u.searchParams.get("v");
     if (v && /^[\w-]{11}$/.test(v)) return v;
     const m = u.pathname.match(/\/(?:embed|v|shorts)\/([^/?#]+)/i);
     if (m && m[1] && /^[\w-]{11}$/.test(m[1])) return m[1];
-  } catch { /* ignore */ }
+  } catch {/* ignore */}
   return "";
 }
 
@@ -35,7 +53,7 @@ function shuffle(a) {
 }
 
 /* =========================
-   Seed-пул видео
+   Seed-пул (поправлен ID Adele)
    ========================= */
 
 const SEED_IDS = uniq([
@@ -54,29 +72,36 @@ const SEED_IDS = uniq([
 ]);
 
 /* =========================
-   localStorage: кэш пула
+   localStorage: пул и чёрный список
    ========================= */
 
 const LS_KEY_POOL = "am.radio.pool";
 const LS_KEY_LAST = "am.radio.last";
+const LS_KEY_BAD  = "am.radio.bad";    // сюда кладём ID, которые не играют (embed off)
 
-function readPoolLS() {
-  try {
-    const raw = localStorage.getItem(LS_KEY_POOL);
-    const arr = raw ? JSON.parse(raw) : [];
-    return Array.isArray(arr) ? uniq(arr) : [];
-  } catch { return []; }
+function readJSON(key, fallback = []) {
+  try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; }
+  catch { return fallback; }
 }
-function savePoolLS(arr) {
-  try {
-    localStorage.setItem(LS_KEY_POOL, JSON.stringify(uniq(arr).slice(0, 800)));
-  } catch { /* ignore */ }
+function writeJSON(key, val) {
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
 }
+
+function readPoolLS() { return uniq(readJSON(LS_KEY_POOL, [])); }
+function savePoolLS(arr) { writeJSON(LS_KEY_POOL, uniq(arr).slice(0, 800)); }
 function addToPoolLS(ids) {
   if (!ids?.length) return;
   const cur = new Set(readPoolLS());
-  ids.forEach((id) => cur.add(id));
+  ids.forEach((id) => { const x = getYouTubeId(id); if (x) cur.add(x); });
   savePoolLS([...cur]);
+}
+
+function readBadLS() { return new Set(readJSON(LS_KEY_BAD, [])); }
+function addBadLS(ids) {
+  if (!ids?.length) return;
+  const cur = new Set(readBadLS());
+  ids.forEach((id) => { const x = getYouTubeId(id); if (x) cur.add(x); });
+  writeJSON(LS_KEY_BAD, [...cur]);
 }
 
 /* =========================
@@ -85,20 +110,27 @@ function addToPoolLS(ids) {
 
 function collectFromDOM(root = document) {
   const out = new Set();
+
+  // Ссылки на YouTube
   root.querySelectorAll('a[href*="youtu"], a.yt').forEach((a) => {
     const href = a.getAttribute("href") || "";
     const id = getYouTubeId(href);
     if (id) out.add(id);
   });
+
+  // Возможные data-атрибуты
   root.querySelectorAll("[data-yt],[data-youtube],[data-ytid]").forEach((el) => {
-    const raw = el.getAttribute("data-yt") ||
-                el.getAttribute("data-youtube") ||
-                el.getAttribute("data-ytid") || "";
+    const raw =
+      el.getAttribute("data-yt") ||
+      el.getAttribute("data-youtube") ||
+      el.getAttribute("data-ytid") || "";
     const id = getYouTubeId(raw);
     if (id) out.add(id);
   });
+
   return [...out];
 }
+
 function installCollector() {
   addToPoolLS(collectFromDOM());
   const mo = new MutationObserver((mutations) => {
@@ -116,19 +148,28 @@ function installCollector() {
 }
 
 /* =========================
-   Mix Radio
+   Построение итогового пула (без «плохих»)
    ========================= */
 
 function buildPool() {
-  const mem = readPoolLS();
-  const dom = collectFromDOM();
-  return uniq([...SEED_IDS, ...mem, ...dom]);
+  const bad = readBadLS();
+  const mem = readPoolLS().filter(id => !bad.has(id));
+  const dom = collectFromDOM().filter(id => !bad.has(id));
+  const seed = SEED_IDS.filter(id => !bad.has(id));
+  return uniq([...seed, ...mem, ...dom].map(getYouTubeId).filter(Boolean));
 }
+
+/* =========================
+   Mix Radio
+   ========================= */
+
 function startMixRadio(player) {
   const pool = buildPool();
   if (!pool.length || !player) return;
 
   let order = shuffle(pool);
+
+  // анти-повтор стартового
   const last = localStorage.getItem(LS_KEY_LAST);
   if (last && order.length > 1 && order[0] === last) {
     order.push(order.shift());
@@ -137,32 +178,85 @@ function startMixRadio(player) {
 
   if (typeof player.openQueue === "function") {
     player.openQueue(order, { shuffle: false, loop: true, startIndex: 0 });
-  } else if (typeof player.playYouTube === "function") {
-    player.playYouTube(order[0]);
-  } else if (typeof player.play === "function") {
-    player.play(order[0]);
+  } else {
+    if (typeof player.playYouTube === "function") player.playYouTube(order[0]);
+    else if (typeof player.play === "function") player.play(order[0]);
   }
 }
 
 /* =========================
-   Привязка ассистента
+   Автозапуск из текущего экрана
+   ========================= */
+
+function collectPlayableIdsFromScreen() {
+  const ids = new Set();
+
+  // всё, что видно в сетке и модалке
+  document.querySelectorAll(
+    '#artists-grid a.yt, #artist-modal a.yt, [data-yt], [data-youtube], [data-ytid]'
+  ).forEach(el => {
+    const raw = el.getAttribute?.("href") ||
+                el.getAttribute?.("data-yt") ||
+                el.getAttribute?.("data-youtube") ||
+                el.getAttribute?.("data-ytid") || "";
+    const id = getYouTubeId(raw);
+    if (id) ids.add(id);
+  });
+
+  // фоллбэк — всё, что на странице
+  if (!ids.size) {
+    collectFromDOM(document).forEach(id => ids.add(id));
+  }
+
+  // выкидываем «плохие»
+  const bad = readBadLS();
+  return [...ids].filter(id => !bad.has(id));
+}
+
+/* =========================
+   Привязка ассистента к каталогу
    ========================= */
 
 function bindAssistantToCatalog(player) {
+  // Рекомендации (жанр/настроение/поиск по слову)
   document.addEventListener("assistant:recommend", (e) => {
-    const { mood, genre, decade, like } = e.detail || {};
+    const { mood, genre, decade, like, autoplay } = e.detail || {};
 
+    // ЖАНР — кликаем существующий пункт дропа
     if (genre) {
-      const item = document.querySelector(`#dd-genre-list li[data-val="${genre}"]`);
+      const item = document.querySelector(
+        '#dd-genre-list li[data-val="' + genre + '"]'
+      );
       if (item) item.click();
     }
+
+    // ПОИСК — вписываем в поле и триггерим input
     if (like) {
       const q = document.getElementById("flt-q");
-      if (q) { q.value = like; q.dispatchEvent(new Event("input", { bubbles: true })); }
+      if (q) {
+        q.value = like;
+        q.dispatchEvent(new Event("input", { bubbles: true }));
+      }
     }
-    // mood/decade — под реальный маппинг, при необходимости вызови refresh()
+
+    // mood/decade — на твой маппинг тегов/чекбоксов (при наличии)
+    // try { refresh(); } catch {}
+
+    // Автозапуск: дашь UI перерисоваться и соберём id
+    if (autoplay) {
+      setTimeout(() => {
+        const ids = collectPlayableIdsFromScreen();
+        if (ids.length && typeof player?.openQueue === "function") {
+          player.openQueue(ids, { startIndex: 0, shuffle: false, loop: true });
+        } else {
+          // если совсем ничего не нашли — микс-радио
+          startMixRadio(player);
+        }
+      }, 120);
+    }
   });
 
+  // Управление плеером (подстраховочные фоллбэки)
   const safe = (fn) => { try { fn && fn(); } catch {} };
 
   document.addEventListener("assistant:player-play", () => {
@@ -172,8 +266,9 @@ function bindAssistantToCatalog(player) {
       else startMixRadio(player);
     });
   });
-  document.addEventListener("assistant:player-pause", () => safe(() => player?.pause?.()));
-  document.addEventListener("assistant:player-stop",  () => safe(() => player?.stop?.()));
+  document.addEventListener("assistant:player-pause", () => safe(() => {
+    (player?.pause && player.pause()) || (player?.stop && player.stop());
+  }));
   document.addEventListener("assistant:player-next",  () => safe(() => {
     if (player?.hasQueue?.()) player.next?.(); else startMixRadio(player);
   }));
@@ -186,19 +281,16 @@ function bindAssistantToCatalog(player) {
     }
   }));
 
-  // Прямой запуск по id/URL
+  // MixRadio явным событием
+  document.addEventListener("assistant:mixradio", () => startMixRadio(player));
+
+  // Прямой запуск по id/URL (если ассистент пришлёт конкретику)
   document.addEventListener("assistant:play", (e) => {
     const { id, query } = e.detail || {};
-    const target = id || getYouTubeId(query);
+    const target = getYouTubeId(id || query);
     if (target && typeof player?.openQueue === "function") {
       player.openQueue([target], { shuffle: false, loop: true, startIndex: 0 });
     }
-  });
-
-  // MixRadio из ассистента
-  document.addEventListener("assistant:mixradio", () => {
-    const btn = document.getElementById("random-radio");
-    if (btn) btn.click(); else startMixRadio(player);
   });
 }
 
@@ -211,7 +303,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const player = (typeof createMiniPlayer === "function") ? createMiniPlayer() : null;
 
-  // делаем плеер глобальным (для bridge.js/консоли)
+  // Сделаем доступным глобально (модалка/мост могут подписаться)
   if (player) {
     window.AM = window.AM || {};
     window.AM.player = player;
@@ -229,6 +321,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!player) return;
 
       if (player.isMinimized?.()) { player.next?.(); return; }
+
       if (!player.isActive?.()) {
         if (player.hasQueue?.()) player.next?.();
         else startMixRadio(player);
