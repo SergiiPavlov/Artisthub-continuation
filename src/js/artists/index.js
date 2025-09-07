@@ -1,11 +1,6 @@
 // --------------------------------------------------
 // Artists: точка входа
-// - initArtists(): инициализация сетки/фильтров/модалок
-// - createMiniPlayer(): создаёт мини-плеер
-// - mountPlayerPatch(player): навешивает события управления с ассистента
-// - installMixRadioMenu(btnSelector, player): поповер меню под Mix Radio
 // --------------------------------------------------
-
 import { initArtists } from "./features/init.js";
 import { createMiniPlayer } from "./features/player.js";
 import mountPlayerPatch from "./features/player-patch.js";
@@ -15,11 +10,9 @@ import { installMixRadioMenu } from "./features/mixradio-menu.js";
    Утилиты
    ========================= */
 
-/** Достаёт YouTube ID из ID или URL (youtu.be, /embed, /shorts, ?v=) */
 function getYouTubeId(urlOrId) {
   if (!urlOrId) return "";
-  if (/^[\w-]{11}$/.test(urlOrId)) return urlOrId; // уже ID
-
+  if (/^[\w-]{11}$/.test(urlOrId)) return urlOrId;
   try {
     const u = new URL(urlOrId, location.href);
     if (/youtu\.be$/i.test(u.hostname)) return u.pathname.slice(1);
@@ -42,11 +35,10 @@ function shuffle(a) {
 }
 
 /* =========================
-   Seed-пул видео (можно дополнять)
+   Seed-пул видео
    ========================= */
 
 const SEED_IDS = uniq([
-  // базовый набор
   "Zi_XLOBDo_Y","3JZ_D3ELwOQ","fRh_vgS2dFE","OPf0YbXqDm0","60ItHLz5WEA",
   "2Vv-BfVoq4g","kXYiU_JCYtU","UceaB4D0jpo","RubBzkZzpUA","kJQP7kiw5Fk",
   "CevxZvSJLk8","pRpeEdMmmQ0","IcrbM1l_BoI","YVkUvmDQ3HY","hT_nvWreIhg",
@@ -54,7 +46,6 @@ const SEED_IDS = uniq([
   "LrUvu1mlWco","hLQl3WQQoQ0","RgKAFK5djSk","SlPhMPnQ58k","oRdxUFDoQe0",
   "Pkh8UtuejGw","tt2k8PGm-TI","lY2yjAdbvdQ","pXRviuL6vMY","nfs8NYg7yQM",
   "nCkpzqqog4k","M7lc1UVf-VE",
-  // расширение
   "fLexgOxsZu0","2vjPBrBU-TM","9bZkp7q19f0","e-ORhEE9VVg","gCYcHz2k5x0",
   "ktvTqknDobU","ub82Xb1C8os","fKopy74weus","Qv5fqunQ_4I","vNoKguSdy4Y",
   "0KSOMA3QBU0","lp-EO5I60KA","DK_0jXPuIr0","tVj0ZTS4WF4","6fVE8kSM43I",
@@ -94,39 +85,28 @@ function addToPoolLS(ids) {
 
 function collectFromDOM(root = document) {
   const out = new Set();
-
-  // Ссылки на YouTube
   root.querySelectorAll('a[href*="youtu"], a.yt').forEach((a) => {
     const href = a.getAttribute("href") || "";
     const id = getYouTubeId(href);
     if (id) out.add(id);
   });
-
-  // Возможные data-атрибуты
   root.querySelectorAll("[data-yt],[data-youtube],[data-ytid]").forEach((el) => {
-    const raw =
-      el.getAttribute("data-yt") ||
-      el.getAttribute("data-youtube") ||
-      el.getAttribute("data-ytid") ||
-      "";
+    const raw = el.getAttribute("data-yt") ||
+                el.getAttribute("data-youtube") ||
+                el.getAttribute("data-ytid") || "";
     const id = getYouTubeId(raw);
     if (id) out.add(id);
   });
-
   return [...out];
 }
-
 function installCollector() {
-  // стартовая выборка
   addToPoolLS(collectFromDOM());
-
-  // наблюдаем за добавлениями (модалки, подгрузки и т.п.)
   const mo = new MutationObserver((mutations) => {
     let added = [];
     for (const m of mutations) {
       if (!m.addedNodes) continue;
       m.addedNodes.forEach((n) => {
-        if (n.nodeType !== 1) return; // ELEMENT_NODE
+        if (n.nodeType !== 1) return;
         added = added.concat(collectFromDOM(n));
       });
     }
@@ -136,7 +116,7 @@ function installCollector() {
 }
 
 /* =========================
-   Построение итогового пула
+   Mix Radio
    ========================= */
 
 function buildPool() {
@@ -144,66 +124,45 @@ function buildPool() {
   const dom = collectFromDOM();
   return uniq([...SEED_IDS, ...mem, ...dom]);
 }
-
-/* =========================
-   Mix Radio
-   ========================= */
-
 function startMixRadio(player) {
   const pool = buildPool();
   if (!pool.length || !player) return;
 
-  // большая перемешанная очередь
   let order = shuffle(pool);
-
-  // анти-повтор стартового
   const last = localStorage.getItem(LS_KEY_LAST);
   if (last && order.length > 1 && order[0] === last) {
     order.push(order.shift());
   }
   localStorage.setItem(LS_KEY_LAST, order[0]);
 
-  // отдаём очередь плееру (API нашего мини-плеера)
   if (typeof player.openQueue === "function") {
     player.openQueue(order, { shuffle: false, loop: true, startIndex: 0 });
-  } else {
-    // фолбэк: просто сыграть первый ID, если есть метод playYouTube/id
-    if (typeof player.playYouTube === "function") player.playYouTube(order[0]);
-    else if (typeof player.play === "function") player.play(order[0]);
+  } else if (typeof player.playYouTube === "function") {
+    player.playYouTube(order[0]);
+  } else if (typeof player.play === "function") {
+    player.play(order[0]);
   }
 }
 
 /* =========================
-   Привязка ассистента к каталогу
+   Привязка ассистента
    ========================= */
 
 function bindAssistantToCatalog(player) {
-  // Рекомендации (жанр/настроение/поиск по слову)
   document.addEventListener("assistant:recommend", (e) => {
     const { mood, genre, decade, like } = e.detail || {};
 
-    // ЖАНР — кликаем существующий пункт дропа
     if (genre) {
-      const item = document.querySelector(
-        '#dd-genre-list li[data-val="' + genre + '"]'
-      );
+      const item = document.querySelector(`#dd-genre-list li[data-val="${genre}"]`);
       if (item) item.click();
     }
-
-    // ПОИСК — вписываем в поле и триггерим input
     if (like) {
       const q = document.getElementById("flt-q");
-      if (q) {
-        q.value = like;
-        q.dispatchEvent(new Event("input", { bubbles: true }));
-      }
+      if (q) { q.value = like; q.dispatchEvent(new Event("input", { bubbles: true })); }
     }
-
-    // mood/decade — под твой реальный маппинг тегов/чекбоксов
-    // try { refresh(); } catch {}
+    // mood/decade — под реальный маппинг, при необходимости вызови refresh()
   });
 
-  // Фолбэки на случай, если player-patch не подхватился:
   const safe = (fn) => { try { fn && fn(); } catch {} };
 
   document.addEventListener("assistant:player-play", () => {
@@ -214,6 +173,7 @@ function bindAssistantToCatalog(player) {
     });
   });
   document.addEventListener("assistant:player-pause", () => safe(() => player?.pause?.()));
+  document.addEventListener("assistant:player-stop",  () => safe(() => player?.stop?.()));
   document.addEventListener("assistant:player-next",  () => safe(() => {
     if (player?.hasQueue?.()) player.next?.(); else startMixRadio(player);
   }));
@@ -226,13 +186,19 @@ function bindAssistantToCatalog(player) {
     }
   }));
 
-  // НОВОЕ: прямой запуск по id/URL (если ассистент прислал такое)
+  // Прямой запуск по id/URL
   document.addEventListener("assistant:play", (e) => {
     const { id, query } = e.detail || {};
     const target = id || getYouTubeId(query);
     if (target && typeof player?.openQueue === "function") {
       player.openQueue([target], { shuffle: false, loop: true, startIndex: 0 });
     }
+  });
+
+  // MixRadio из ассистента
+  document.addEventListener("assistant:mixradio", () => {
+    const btn = document.getElementById("random-radio");
+    if (btn) btn.click(); else startMixRadio(player);
   });
 }
 
@@ -241,26 +207,21 @@ function bindAssistantToCatalog(player) {
    ========================= */
 
 document.addEventListener("DOMContentLoaded", () => {
-  try { initArtists(); } catch { /* ignore */ }
+  try { initArtists(); } catch {}
 
-  // Создаём мини-плеер
-  const player =
-    (typeof createMiniPlayer === "function") ? createMiniPlayer() : null;
+  const player = (typeof createMiniPlayer === "function") ? createMiniPlayer() : null;
 
-  // НОВОЕ: сделать плеер глобальным для моста/модалки
+  // делаем плеер глобальным (для bridge.js/консоли)
   if (player) {
     window.AM = window.AM || {};
     window.AM.player = player;
     document.dispatchEvent(new CustomEvent("am:player-ready", { detail: { player } }));
   }
 
-  // Патч — строго после создания плеера
-  try { if (player) mountPlayerPatch(player); } catch { /* ignore */ }
+  try { if (player) mountPlayerPatch(player); } catch {}
 
-  // Сбор ID на лету (модалки, динамика)
   installCollector();
 
-  // Кнопка «Mix Radio / Next»
   const btn = document.querySelector("#random-radio");
   if (btn) {
     btn.addEventListener("click", (e) => {
@@ -268,18 +229,15 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!player) return;
 
       if (player.isMinimized?.()) { player.next?.(); return; }
-
       if (!player.isActive?.()) {
         if (player.hasQueue?.()) player.next?.();
         else startMixRadio(player);
         return;
       }
-
       player.next?.();
     });
   }
 
-  // Радио-меню (доп. кнопка под MixRadio)
   const ensureMenu = () => installMixRadioMenu("#mixradio-menu-btn", player);
   ensureMenu();
   window.addEventListener("load", ensureMenu);
@@ -287,6 +245,5 @@ document.addEventListener("DOMContentLoaded", () => {
     setTimeout(ensureMenu, 0);
   });
 
-  // Привязка ассистента
   bindAssistantToCatalog(player);
 });

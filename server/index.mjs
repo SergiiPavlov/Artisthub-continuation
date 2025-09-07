@@ -4,79 +4,89 @@ import cors from 'cors';
 import OpenAI from 'openai';
 
 const app = express();
-const PORT = Number(process.env.PORT || 8787);
-const MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
-app.get('/api/ping', (_, res) => res.json({ ok: true }));
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
 
-// Чёткая инструкция модели: отдавай JSON + действие play/query
-const SYSTEM = `
-Ты — дружелюбный ассистент музыкального сайта ArtistsHub.
-Говоришь кратко и по делу. Помимо текста ответа возвращай список "actions".
-ДОПУСТИМЫЕ ДЕЙСТВИЯ:
+const MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
-- { "type":"play", "query":"строка" } — пользователь попросил конкретную песню/исполнителя.
-  Пример: запрос "включи metallica enter sandman" -> query: "Metallica Enter Sandman".
+/**
+ * Мы просим модель:
+ * - вести разговор естественно
+ * - когда уместно — возвращать actions (play/pause/next/prev/volume/recommend/mixradio/view)
+ * - при рекомендациях стараться давать хотя бы ОДИН YouTube ID/URL для моментального запуска
+ */
+const SYSTEM_PROMPT = `
+Ты дружелюбный музыкальный ассистент внутри веб-приложения. 
+Всегда отвечай компактно и по делу. Если пользователь просит включить, поставить, запустить — 
+в ответе верни actions, которые фронт может выполнить.
 
-- { "type":"player", "action":"play|pause|next|prev" }
-
-- { "type":"view", "mode":"list|grid" }
-
-- { "type":"recommend", "mood":"happy|calm|sad|energetic" } // по настроению
-- { "type":"recommend", "genre":"rock|pop|metal|..." }        // по жанру
-- { "type":"recommend", "like":"строка поиска" }              // произвольный запрос
-
-- { "type":"volume", "delta": 0.1 } // +/- громкость
-
-Возвращай СТРОГО JSON БЕЗ лишнего текста, вида:
+Формат твоего JSON-ответа:
 {
-  "reply": "краткий дружественный ответ",
-  "explain": "почему так (не обязательно)",
-  "actions": [ ... ]
+  "reply": "краткий текст для пользователя",
+  "actions": [
+    // ноль или больше действий
+    // управление плеером:
+    { "type": "player", "action": "play" | "pause" | "next" | "prev" },
+    { "type": "volume", "delta": -0.1 }, // тише/громче
+    // просмотр:
+    { "type": "view", "mode": "list" | "grid" },
+    // микс-радио:
+    { "type": "mixradio" },
+    // рекомендация (жанр/настроение/поиск по слову):
+    { "type": "recommend", "genre": "jazz", "autoplay": true },
+    { "type": "recommend", "mood": "calm", "autoplay": true },
+    { "type": "recommend", "like": "Metallica", "autoplay": true },
+    // либо прямой запуск:
+    { "type": "play", "id": "Zi_XLOBDo_Y" } // YouTube ID ИЛИ URL (id предпочтительнее)
+  ],
+  "explain": "почему такой выбор (коротко, по желанию)"
 }
 
-Примеры:
-Пользователь: "включи enter sandman"
-Ответ:
-{"reply":"Включаю Enter Sandman — Metallica","actions":[{"type":"play","query":"Metallica Enter Sandman"}]}
-
-Пользователь: "сделай тише"
-Ответ:
-{"reply":"Делаю тише","actions":[{"type":"volume","delta":-0.1}]}
+ВАЖНО:
+- Если пользователь говорит "включи что-нибудь из этого списка / из предложенного", и ранее ты предлагал варианты, 
+  сам выбери и верни либо { "type": "play", "id": "<YT_ID>" }, либо { "type": "recommend", "...", "autoplay": true }.
+- Если ты рекомендуешь треки/артистов, по возможности добавь хотя бы ОДИН YT ID/URL в actions, чтобы фронт мог сразу включить.
+- Не пиши код и не давй длинных лекций, ответ должен быть лаконичным.
 `;
 
 app.post('/api/chat', async (req, res) => {
   try {
-    const user = String(req.body?.message || '').slice(0, 2000) || 'Привет!';
+    const { message, history = [] } = req.body || {};
+    const msgs = [
+      { role: 'system', content: SYSTEM_PROMPT },
+      // подмешиваем последние 6 сообщений истории
+      ...history.slice(-6).map(m => ({ role: m.role, content: m.content })),
+      { role: 'user', content: message || '' }
+    ];
+
     const completion = await client.chat.completions.create({
       model: MODEL,
-      temperature: 0.4,
-      messages: [
-        { role: 'system', content: SYSTEM },
-        { role: 'user', content: user }
-      ]
+      messages: msgs,
+      response_format: { type: "json_object" },
+      temperature: 0.7,
     });
 
     const raw = completion.choices?.[0]?.message?.content || '{}';
+    let data;
+    try { data = JSON.parse(raw); } catch { data = { reply: raw }; }
 
-    let data = null;
-    try { data = JSON.parse(raw); } catch {}
-    if (!data) { const m = raw.match(/\{[\s\S]*\}$/); if (m) { try { data = JSON.parse(m[0]); } catch {} } }
-
-    if (!data || typeof data !== 'object') data = { reply: 'Я тут! Чем помочь?', actions: [] };
-    data.reply = String(data.reply || 'Готов(а) к музыке!');
+    // sanity-fallbacks
+    if (!data || typeof data !== 'object') data = { reply: 'Готово.' };
+    if (!('reply' in data)) data.reply = 'Готово.';
     if (!Array.isArray(data.actions)) data.actions = [];
 
     res.json(data);
   } catch (err) {
-    console.error('API ERR', err?.response?.data || err);
-    res.status(500).json({ reply: 'Сервер занят. Попробуй позже.', actions: [] });
+    console.error('chat error', err);
+    res.status(500).json({ reply: 'Упс, что-то пошло не так. Попробуй ещё раз.', actions: [] });
   }
 });
 
-app.listen(PORT, () => console.log(`API listening on http://localhost:${PORT}`));
+const PORT = Number(process.env.PORT || 8787);
+app.listen(PORT, () => {
+  console.log(`AI server on http://localhost:${PORT}`);
+});

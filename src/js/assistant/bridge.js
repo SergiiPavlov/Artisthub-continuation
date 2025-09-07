@@ -1,131 +1,137 @@
-// Assistant bridge: переводит события чата в действия плеера и умеет
-// найти YouTube-видео "по фразе" через oEmbed (без ключей). Кэш в localStorage.
+/* Bridge: превращаем события assistant:* в реальные действия плеера/интерфейса */
 (() => {
-  // --- доступ к плееру ---
-  let player = (window.AM && window.AM.player) || null;
-  document.addEventListener('am:player-ready', (e) => { player = e.detail?.player || player; });
+  const q = (sel) => document.querySelector(sel);
 
-  // --- извлечь YT id из url/строки ---
-  function getId(urlOrId) {
-    if (!urlOrId) return '';
-    if (/^[\w-]{11}$/.test(urlOrId)) return urlOrId;
-    try {
-      const u = new URL(urlOrId, location.href);
-      if (/youtu\.be$/i.test(u.hostname)) return u.pathname.slice(1);
-      const v = u.searchParams.get('v');
-      if (v && /^[\w-]{11}$/.test(v)) return v;
-      const m = u.pathname.match(/\/(?:embed|v|shorts)\/([^/?#]+)/i);
-      if (m && m[1] && /^[\w-]{11}$/.test(m[1])) return m[1];
-    } catch {}
-    return '';
+  function safeCall(method, ...args) {
+    try { return method?.(...args); } catch { /* no-op */ }
   }
-
-  // --- пул id: из кеша (am.radio.pool) или быстроскан DOM ---
-  function readPoolLS() {
-    try { const a = JSON.parse(localStorage.getItem('am.radio.pool') || '[]'); return Array.isArray(a) ? a : []; }
-    catch { return []; }
-  }
-  function collectFromDOM() {
-    const set = new Set();
-    document.querySelectorAll('a[href*="youtu"],[data-yt],[data-youtube],[data-ytid]').forEach(el => {
-      const raw = el.getAttribute('href') || el.getAttribute('data-yt') || el.getAttribute('data-youtube') || el.getAttribute('data-ytid') || '';
-      const id = getId(raw); if (id) set.add(id);
-    });
-    return [...set];
-  }
-  function getPool() {
-    const ls = readPoolLS();
-    if (ls.length) return ls;
-    return collectFromDOM();
-  }
-
-  // --- oEmbed мета (title/author) с кэшем ---
-  const metaCache = new Map();
-  async function getMeta(id) {
-    if (metaCache.has(id)) return metaCache.get(id);
-    const key = `am.ytmeta.${id}`;
-    try { const raw = localStorage.getItem(key); if (raw) { const obj = JSON.parse(raw); metaCache.set(id, obj); return obj; } } catch {}
-    try {
-      const r = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`);
-      if (!r.ok) throw 0;
-      const j = await r.json();
-      const meta = { title: j.title || '', author: j.author_name || '' };
-      localStorage.setItem(key, JSON.stringify(meta));
-      metaCache.set(id, meta);
-      return meta;
-    } catch {
-      const meta = { title: '', author: '' };
-      metaCache.set(id, meta);
-      return meta;
+  function clickFirst(...selectors) {
+    for (const s of selectors) {
+      const el = q(s);
+      if (el) { el.click(); return true; }
     }
+    return false;
   }
 
-  // --- простая «фаззи» оценка совпадения ---
-  function norm(s) {
-    return (s || '')
-      .toLowerCase()
-      .normalize('NFKD')
-      .replace(/[^\p{L}\p{N} ]/gu, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-  }
-  function score(query, title, author) {
-    const nq = norm(query), nt = norm(title), na = norm(author);
-    let s = 0;
-    if (nt.includes(nq)) s += 4;
-    for (const w of nq.split(' ')) {
-      if (!w) continue;
-      if (nt.includes(w)) s += 1;
-      if (na.includes(w)) s += 0.5;
+  function player() { return (window.AM && window.AM.player) || null; }
+
+  // Вид (лист/сетка)
+  document.addEventListener("assistant:view", (e) => {
+    const mode = e?.detail?.mode;
+    const isList = mode === "list";
+    document.documentElement.classList.toggle("list-view", !!isList);
+  });
+
+  // Прямой запуск по ID/URL (если ассистент прислал конкретную песню)
+  document.addEventListener("assistant:play", (e) => {
+    const id = e?.detail?.id;
+    const query = e?.detail?.query;
+    const p = player();
+    const ytid = (s) => {
+      if (!s) return "";
+      if (/^[\w-]{11}$/.test(s)) return s;
+      try {
+        const u = new URL(s, location.href);
+        if (/youtu\.be$/i.test(u.hostname)) return u.pathname.slice(1);
+        const m = u.pathname.match(/\/(?:embed|v|shorts)\/([^/?#]+)/i);
+        if (m && m[1] && /^[\w-]{11}$/.test(m[1])) return m[1];
+        const v = u.searchParams.get("v");
+        if (v && /^[\w-]{11}$/.test(v)) return v;
+      } catch {}
+      return "";
+    };
+
+    const tid = id || ytid(query);
+    if (p && tid && typeof p.openQueue === "function") {
+      p.openQueue([tid], { startIndex: 0, shuffle: false, loop: true });
+    } else if (tid) {
+      // как фоллбэк — попробуем просто кликнуть на ссылку в DOM, если она есть
+      const link = document.querySelector(`a[href*="${tid}"]`);
+      if (link) link.click();
     }
-    return s;
-  }
+  });
 
-  async function findBestIdByQuery(query) {
-    const ids = getPool();
-    if (!ids.length) return null;
-    const subset = ids.slice(0, 150); // ограничим, чтобы не дёргать слишком много
-    let best = { id: null, s: -1 };
-    await Promise.all(subset.map(async (id) => {
-      const meta = await getMeta(id);
-      const s = score(query, meta.title, meta.author);
-      if (s > best.s) best = { id, s };
-    }));
-    return best.id;
-  }
-
-  async function playByQuery(query) {
-    if (!player) return;
-    const direct = getId(query);
-    if (direct) {
-      player.openQueue?.([direct], { shuffle: false, loop: true, startIndex: 0 });
+  // Транспорт: play/pause/next/prev/stop
+  document.addEventListener("assistant:player-play", () => {
+    const p = player();
+    if (!p) {
+      clickFirst(".am-player [data-action='play']",
+                 ".am-player__btn--play",
+                 "button[aria-label='Play']");
       return;
     }
-    const id = await findBestIdByQuery(query);
-    if (id) {
-      player.openQueue?.([id], { shuffle: false, loop: true, startIndex: 0 });
+    if (p.isActive?.()) { safeCall(p.play); }
+    else if (p.hasQueue?.()) { safeCall(p.play); }
+    else if (typeof p.openQueue === "function") {
+      // если очереди нет — запустить MixRadio через событие
+      document.dispatchEvent(new CustomEvent("assistant:mixradio"));
+    } else {
+      safeCall(p.play);
     }
-  }
-
-  // --- события от ассистента ---
-  document.addEventListener('assistant:play', (e) => {
-    const { id, query } = e.detail || {};
-    if (id && player) player.openQueue?.([id], { shuffle: false, loop: true, startIndex: 0 });
-    else if (query) playByQuery(query);
-  });
-  document.addEventListener('assistant:play-query', (e) => {
-    const { query } = e.detail || {};
-    if (query) playByQuery(query);
   });
 
-  // базовые кнопки/режимы
-  document.addEventListener('assistant:player-play',  () => player?.play?.());
-  document.addEventListener('assistant:player-pause', () => player?.pause?.());
-  document.addEventListener('assistant:player-next',  () => player?.next?.());
-  document.addEventListener('assistant:player-prev',  () => player?.prev?.());
-  document.addEventListener('assistant:view', (e) => {
-    const mode = e.detail?.mode;
-    document.documentElement.classList.toggle('list-view', mode === 'list');
+  document.addEventListener("assistant:player-pause", () => {
+    const p = player();
+    if (!p || !safeCall(p.pause)) {
+      clickFirst(".am-player [data-action='pause']",
+                 ".am-player__btn--pause",
+                 "button[aria-label='Pause']");
+    }
   });
-  document.addEventListener('assistant:recommend', () => { /* твои фильтры уже обрабатываются в artists/index */ });
+
+  document.addEventListener("assistant:player-stop", () => {
+    const p = player();
+    if (!p || !safeCall(p.stop)) {
+      clickFirst(".am-player [data-action='stop']",
+                 ".am-player__btn--stop",
+                 "button[aria-label='Stop']");
+    }
+  });
+
+  document.addEventListener("assistant:player-next", () => {
+    const p = player();
+    if (!p || !safeCall(p.next)) {
+      clickFirst(".am-player [data-action='next']",
+                 ".am-player__btn--next",
+                 "button[aria-label='Next']");
+    }
+  });
+
+  document.addEventListener("assistant:player-prev", () => {
+    const p = player();
+    if (!p || !safeCall(p.prev)) {
+      clickFirst(".am-player [data-action='prev']",
+                 ".am-player__btn--prev",
+                 "button[aria-label='Previous']", "button[aria-label='Prev']");
+    }
+  });
+
+  // Громкость
+  document.addEventListener("assistant:volume", (e) => {
+    const delta = Number(e?.detail?.delta ?? 0);
+    const p = player();
+    if (p && typeof p.setVolume === "function") {
+      const cur = p.getVolume?.() ?? 0.7;
+      const next = Math.max(0, Math.min(1, cur + delta));
+      p.setVolume(next);
+      return;
+    }
+
+    // Фоллбэк — ползунок громкости в DOM
+    const slider = q(".am-player input[type='range'].am-player__volume") ||
+                   q(".am-player input[type='range'][name='volume']") ||
+                   q(".am-player input[type='range']");
+    if (slider) {
+      const cur = Number(slider.value || 70) / 100;
+      const next = Math.max(0, Math.min(1, cur + delta));
+      slider.value = String(Math.round(next * 100));
+      slider.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  });
+
+  // MixRadio — отдаём в index.js, там есть buildPool/startMixRadio
+  document.addEventListener("assistant:mixradio", () => {
+    const btn = q("#random-radio");
+    if (btn) btn.click();
+  });
 })();

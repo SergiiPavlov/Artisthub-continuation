@@ -8,21 +8,19 @@
   "scripts": {
     "dev": "vite",
     "dev:host": "vite --host",
+    "server": "node server/index.mjs",
+    "dev:all": "concurrently -k -n WEB,API -c green,magenta \"vite\" \"node server/index.mjs\"",
     "build": "vite build",
     "build:local": "cross-env VITE_BASE=/ vite build",
     "preview": "vite preview",
     "preview:local": "npm run build:local && vite preview",
     "preview:nopurge": "cross-env NO_PURGE=1 VITE_BASE=/ vite build && vite preview",
     "preview:nosort": "cross-env NO_MQ_SORT=1 VITE_BASE=/ vite build && vite preview",
-
     "lint:js": "eslint .",
     "lint:css": "stylelint \"src/**/*.css\"",
     "lint:fix": "eslint . --fix",
     "doctor": "npm run lint:js && npm run lint:css && vite build",
-    "analyze": "vite build && node -e \"console.log('Open dist/stats.html')\"",
-
-    "server": "node ./server/index.mjs",
-    "all": "concurrently -k -n API,WEB -c magenta,cyan \"npm:server\" \"npm:dev\""
+    "analyze": "vite build && node -e \"console.log('Open dist/stats.html')\""
   },
   "dependencies": {
     "axios": "^1.11.0",
