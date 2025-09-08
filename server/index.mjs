@@ -1,36 +1,50 @@
-// server/index.mjs — v4.3.1-merge (2025-09-08)
-// Объединение лучшего из v4.2.4 и короткого варианта:
-// + Сохранил: память по sid, агрессивную нормализацию, эвристики интентов,
-//   last-chance, YouTube enrichment, final guard, DEBUG-логи, health с version.
-// + Добавил/оставил: FEWSHOTS в валидном JSON, soft-repair JSON из ответа,
-//   строгий контракт JSON, аккуратный таймаут и обработку ошибок.
+// server/index.mjs — v4.2.6 (2025-09-08)
+// Focus: стабильный JSON-контракт + обогащение до точного YouTube videoId + опц. Piper TTS.
+// Совместимо с фронтом Artisthub (assistant:* события и публичный API плеера).
 
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
+import { spawn } from 'node:child_process';
+import os from 'node:os';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const app = express();
 const PORT = Number(process.env.PORT || 8787);
-const VERSION = 'server-v4.3.1-merge-2025-09-08';
+const VERSION = 'server-v4.2.6-2025-09-08';
 const DEBUG_INTENT = String(process.env.DEBUG_INTENT || '') === '1';
 
 // === LLM / YT конфиг ===
 const OPENAI_BASE_URL = (process.env.OPENAI_BASE_URL || 'http://127.0.0.1:1234/v1').replace(/\/+$/,'');
-const OPENAI_API_KEY  = process.env.OPENAI_API_KEY || process.env.LLM_API_KEY || 'lm-studio';
-const OPENAI_MODEL    = process.env.OPENAI_MODEL || process.env.LLM_MODEL || 'qwen2.5-7b-instruct';
-const YT_API_KEY      = process.env.YT_API_KEY     || ''; // опционально для автоподбора YouTube ID
+const OPENAI_API_KEY  = process.env.OPENAI_API_KEY || 'lm-studio';
+const OPENAI_MODEL    = process.env.OPENAI_MODEL   || process.env.LLM_MODEL || 'qwen2.5-7b-instruct';
+
+const YT_API_KEY      = process.env.YT_API_KEY     || ''; // YouTube Data API v3
+const YT_ENABLED      = !!YT_API_KEY;
+
+// Piper (опционально)
+const PIPER_BIN       = process.env.PIPER_PATH      || process.env.PIPER_BIN || 'piper';
+const PIPER_VOICE     = process.env.PIPER_VOICE     || process.env.PIPER_VOICE_PATH || ''; // путь к .onnx или любимый голос
 
 // --- middleware
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
 
+// --- health
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, version: VERSION, model: OPENAI_MODEL, base: OPENAI_BASE_URL });
+  res.json({
+    ok: true,
+    version: VERSION,
+    model: OPENAI_MODEL,
+    base: OPENAI_BASE_URL,
+    yt: YT_ENABLED
+  });
 });
 
-/* ---------------- Память сессий (короткая) ---------------- */
+// === Память сессий (короткая) ===
 const memory = new Map(); // sid -> [{role, content}, ...]
 const MAX_SRV_HISTORY = 8;
 
@@ -55,7 +69,7 @@ function pushHistory(sid, role, content) {
   memory.set(sid, arr);
 }
 
-/* ---------------- Система + few-shots (строгий JSON) ---------------- */
+// === SYSTEM + FEWSHOTS (строгий JSON) ===
 const SYSTEM = `Ты — ассистент музыкальной витрины ArtistsHub.
 Отвечай СТРОГО одним JSON-объектом:
 {
@@ -84,57 +98,40 @@ const SYSTEM = `Ты — ассистент музыкальной витрин�
 - Если не уверен, верни actions:[] и короткий reply.
 `;
 
-// FEWSHOTS как валидные JSON-строки (минимум кавер-кейсов для парсера)
 const FEWSHOTS = [
-  { "role": "user", "content": "включи джаз" },
-  { "role": "assistant", "content": "{\"reply\":\"Включаю джаз.\",\"actions\":[{\"type\":\"recommend\",\"genre\":\"джаз\",\"autoplay\":true}]}" },
-
-  { "role": "user", "content": "сделай паузу" },
-  { "role": "assistant", "content": "{\"reply\":\"Пауза.\",\"actions\":[{\"type\":\"player\",\"action\":\"pause\"}]}" },
-
-  { "role": "user", "content": "громче" },
-  { "role": "assistant", "content": "{\"reply\":\"Громче.\",\"actions\":[{\"type\":\"volume\",\"delta\":0.1}]}" },
-
-  { "role": "user", "content": "включи queen" },
-  { "role": "assistant", "content": "{\"reply\":\"Включаю Queen.\",\"actions\":[{\"type\":\"recommend\",\"like\":\"queen\",\"autoplay\":true}]}" },
-
-  { "role": "user", "content": "что-нибудь спокойное" },
-  { "role": "assistant", "content": "{\"reply\":\"Ставлю спокойное.\",\"actions\":[{\"type\":\"recommend\",\"mood\":\"calm\",\"autoplay\":true}]}" },
-
-  { "role": "user", "content": "жанр рок 80-х" },
-  { "role": "assistant", "content": "{\"reply\":\"Рок 80-х.\",\"actions\":[{\"type\":\"recommend\",\"genre\":\"рок\",\"decade\":\"80s\",\"autoplay\":true}]}" },
-
-  { "role": "user", "content": "похожее на bohemian rhapsody" },
-  { "role": "assistant", "content": "{\"reply\":\"Похожую музыку включаю.\",\"actions\":[{\"type\":\"recommend\",\"like\":\"bohemian rhapsody\",\"autoplay\":true}]}" },
-
-  { "role": "user", "content": "сверни плеер" },
-  { "role": "assistant", "content": "{\"reply\":\"Сворачиваю.\",\"actions\":[{\"type\":\"ui\",\"action\":\"minimize\"}]}" },
-
-  { "role": "user", "content": "разверни" },
-  { "role": "assistant", "content": "{\"reply\":\"Открываю плеер.\",\"actions\":[{\"type\":\"ui\",\"action\":\"expand\"}]}" }
+  { role: 'user', content: 'включи джаз' },
+  { role: 'assistant', content: JSON.stringify({ reply:'Включаю джаз.', actions:[{type:'recommend', genre:'джаз', autoplay:true}] }) },
+  { role: 'user', content: 'сделай паузу' },
+  { role: 'assistant', content: JSON.stringify({ reply:'Пауза.', actions:[{type:'player', action:'pause'}] }) },
+  { role: 'user', content: 'громче' },
+  { role: 'assistant', content: JSON.stringify({ reply:'Громче.', actions:[{type:'volume', delta:0.1}] }) },
+  { role: 'user', content: 'включи queen' },
+  { role: 'assistant', content: JSON.stringify({ reply:'Включаю Queen.', actions:[{type:'recommend', like:'queen', autoplay:true}] }) },
+  { role: 'user', content: 'что-нибудь спокойное' },
+  { role: 'assistant', content: JSON.stringify({ reply:'Ставлю спокойное.', actions:[{type:'recommend', mood:'calm', autoplay:true}] }) },
+  { role: 'user', content: 'жанр рок 80-х' },
+  { role: 'assistant', content: JSON.stringify({ reply:'Рок 80-х.', actions:[{type:'recommend', genre:'рок', decade:'80s', autoplay:true}] }) },
+  { role: 'user', content: 'похожее на bohemian rhapsody' },
+  { role: 'assistant', content: JSON.stringify({ reply:'Похоже на Bohemian Rhapsody.', actions:[{type:'recommend', like:'bohemian rhapsody', autoplay:true}] }) },
+  { role: 'user', content: 'сверни плеер' },
+  { role: 'assistant', content: JSON.stringify({ reply:'Сворачиваю.', actions:[{type:'ui', action:'minimize'}] }) },
+  { role: 'user', content: 'разверни' },
+  { role: 'assistant', content: JSON.stringify({ reply:'Открываю плеер.', actions:[{type:'ui', action:'expand'}] }) },
 ];
 
-/* ---------------- Утилиты ---------------- */
-function capitalize(s='') {
-  return s ? s[0].toUpperCase() + s.slice(1) : s;
-}
+// === Утилиты ===
+function capitalize(s='') { return s ? s[0].toUpperCase() + s.slice(1) : s; }
 function normalizeAggressive(s='') {
   let t = String(s || '');
   try { t = t.normalize('NFC'); } catch {}
-  // unify punctuation/hyphens
   t = t.replace(/[\u2010-\u2015\u2212]/g, '-').replace(/[“”«»„‟]/g, '"').replace(/[’‘‛]/g, "'");
-  // fix й composed as и + ◌̆ (U+0306)
   t = t.replace(/\u0438\u0306/g, '\u0439').replace(/\u0418\u0306/g, '\u0419');
-  // remove any remaining combining marks
-  try { t = t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').normalize('NFC'); } catch {}
-  // map ё → е
+  t = t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').normalize('NFC');
   t = t.replace(/\u0451/g, '\u0435').replace(/\u0401/g, '\u0415');
-  // lower
-  t = t.toLowerCase();
-  return t;
+  return t.toLowerCase().trim();
 }
 
-/* ---------------- Вызов LLM ---------------- */
+// === LLM вызов ===
 async function askLLM(messages) {
   const url = `${OPENAI_BASE_URL}/chat/completions`;
   const payload = { model: OPENAI_MODEL, messages, temperature: 0.2 };
@@ -157,12 +154,12 @@ async function askLLM(messages) {
     }
 
     const j = await r.json().catch(()=> ({}));
-    const content  = j?.choices?.[0]?.message?.content ?? '';
-    const clipped  = String(content).slice(0, 25000); // защита от длинных ответов
-    const maybeJson= extractJSONObject(clipped) || clipped;
+    const content = j?.choices?.[0]?.message?.content ?? '';
+    const clipped = String(content).slice(0, 25000);
+    const maybeJson = extractJSONObject(clipped) || clipped;
     const repaired = softRepair(maybeJson);
     if (repaired && typeof repaired === 'object') {
-      const reply   = String(repaired.reply || '').slice(0,500);
+      const reply = String(repaired.reply || '').slice(0,500);
       const explain = String(repaired.explain || '');
       const actions = Array.isArray(repaired.actions) ? repaired.actions : [];
       return { reply, explain, actions };
@@ -175,8 +172,7 @@ async function askLLM(messages) {
   }
 }
 
-/* ---------------- Soft-repair JSON ---------------- */
-// Вырезаем наибольший JSON-объект из мусорного текста
+// === Soft-repair JSON ===
 function extractJSONObject(s='') {
   if (!s) return null;
   let inStr = false, esc = false, depth = 0, start = -1;
@@ -191,59 +187,43 @@ function extractJSONObject(s='') {
   }
   return null;
 }
-
 function softRepair(text='') {
   if (!text || typeof text !== 'string') return null;
   let t = text.trim();
-
-  // убираем ```json ... ```
   t = t.replace(/^```(?:json)?/i, '').replace(/```$/,'');
-
-  // если уже JSON — отлично
   try { return JSON.parse(t); } catch {}
-
-  // подчистим лишнее вокруг фигурных скобок
-  const braced = t.replace(/^.*?\{/, '{').replace(/\}.*?$/, '}');
-
-  // приводим одинарные кавычки к двойным для ключей/значений
-  let s = braced
-    .replace(/([{\[,]\s*)'([^']+?)'(\s*:)/g, '$1"$2"$3')
-    .replace(/:\s*'([^']*?)'(\s*[,}\]])/g, ':"$1"$2')
+  t = t
+    .replace(/([{,]\s*)'([^']+?)'(\s*:)/g, '$1"$2"$3')
+    .replace(/:\s*'([^']*?)'/g, ': "$1"')
     .replace(/(\{|,)\s*actions\s*:/g, '$1 "actions":')
     .replace(/,\s*}/g, '}').replace(/,\s*]/g, ']');
-
-  try { return JSON.parse(s); } catch {}
+  try { return JSON.parse(t); } catch {}
   return null;
 }
 
-/* ---------------- Эвристики намерений ---------------- */
+// === Эвристики намерений (fallback) ===
 function inferActionsFromUser(text='') {
-  const t = normalizeAggressive(text).trim();
+  const t = normalizeAggressive(text);
   const actions = [];
   if (DEBUG_INTENT) console.log('[intent:text]', t);
 
-  // Транспорт
   if (/(пауза|стоп|останов|pause)/.test(t)) actions.push({ type:'player', action:'pause' });
   if (/выключ(и|ай)/.test(t)) actions.push({ type:'player', action:'stop' });
   if (/следующ|next/.test(t)) actions.push({ type:'player', action:'next' });
   if (/предыдущ|предыд|prev/.test(t)) actions.push({ type:'player', action:'prev' });
 
-  // Громкость
   if (/(громче|louder|volume up|погромче|\bувелич(ь|и) громк)/.test(t)) actions.push({ type:'volume', delta: +0.1 });
   if (/(тише|quieter|volume down|поменьше|\bуменьш(ь|и) громк)/.test(t)) actions.push({ type:'volume', delta: -0.1 });
 
-  // Радио и UI
   if (/(mix ?radio|микс ?радио|радио|random)/.test(t)) actions.push({ type:'mixradio' });
   if (/сверн(и|уть)|minimi[sz]e/.test(t)) actions.push({ type:'ui', action:'minimize' });
   if (/(разверн|покажи плеер|открой плеер|expan[ds])/.test(t)) actions.push({ type:'ui', action:'expand'});
 
   const wantsPlay = /(включ|вруби|постав|поставь|запусти|play|сыграй)/.test(t);
 
-  // Настроение: calm (спокой, lofi, chill, relax, ambient)
   const isCalm = /(спок|спокои|calm|lofi|lo-fi|chill|relax|ambient)/.test(t);
   if (isCalm) actions.push({ type:'recommend', mood:'calm', autoplay: wantsPlay });
 
-  // Жанры (синонимы)
   const gsyn = [
     ['рок','рок|rock|альтернативн|альт|гранж|панк|metal|метал|hard rock|classic rock'],
     ['поп','поп|pop|dance pop|euro pop|эстрад'],
@@ -269,27 +249,24 @@ function inferActionsFromUser(text='') {
     if (re.test(t)) { actions.push({ type:'recommend', genre: canon, autoplay: wantsPlay }); break; }
   }
 
-  // Десятилетия (80s, 80-е, 2010-е)
   const d = t.match(/\b(50|60|70|80|90|2000|2010)(?:-?е|s|х)?\b/);
   if (d) {
     const s = d[1];
-    const decade = /^\d{2}$/.test(s) ? `${s}s` : `${s}s`; // 80 -> 80s; 2010 -> 2010s
+    const decade = /^\d{2}$/.test(s) ? `${s}s` : `${s}s`;
     actions.push({ type:'recommend', decade, autoplay: wantsPlay });
   }
 
-  // Похожее на / включи ...
   const like1 = t.match(/(?:похож(ее|е)\s+на|как у|из\s+)(.+)$/i);
   const like2 = t.match(/(?:включи|вруби|поставь|постав|запусти|найди)\s+(.+)/i);
   const like = (like1 && like1[2]) || (like2 && like2[1]);
   if (like) actions.push({ type:'recommend', like: like.trim(), autoplay: true });
 
-  // Dedup
   const uniq = []; const seen = new Set();
   for (const a of actions) { const k = JSON.stringify(a); if (!seen.has(k)) { seen.add(k); uniq.push(a); } }
   return uniq;
 }
 
-/* --------- Last-chance fallback if still empty --------- */
+// === Last chance ===
 function lastChanceActions(text='') {
   const t = normalizeAggressive(text);
   if (/(спок|спокои|calm|lofi|lo-fi|chill|relax|ambient)/.test(t)) {
@@ -323,26 +300,48 @@ function replyForActions(actions=[]) {
   return 'Готово.';
 }
 
-/* ---------------- YouTube helper ---------------- */
+// === YouTube helper ===
 async function ytSearchFirst(q='') {
-  if (!YT_API_KEY || !q) return '';
+  if (!YT_ENABLED || !q) return '';
   const u = new URL('https://www.googleapis.com/youtube/v3/search');
   u.searchParams.set('part', 'snippet');
   u.searchParams.set('type', 'video');
   u.searchParams.set('maxResults', '1');
   u.searchParams.set('order', 'relevance');
-  u.searchParams.set('videoDuration', 'medium');
+  u.searchParams.set('videoDuration', 'any');
   u.searchParams.set('q', q);
   u.searchParams.set('key', YT_API_KEY);
 
-  const r = await fetch(String(u)).catch(()=> null);
-  if (!r || !r.ok) return '';
-  const j = await r.json().catch(()=> ({}));
-  const id = j?.items?.[0]?.id?.videoId;
-  return (id && /^[\w-]{11}$/.test(id)) ? id : '';
+  try {
+    const r = await fetch(String(u));
+    if (!r.ok) {
+      const t = await r.text().catch(()=> '');
+      console.warn('[yt] HTTP', r.status, t.slice(0,200));
+      return '';
+    }
+    const j = await r.json().catch(()=> ({}));
+    const id = j?.items?.[0]?.id?.videoId;
+    return (id && /^[\w-]{11}$/.test(id)) ? id : '';
+  } catch (e) {
+    console.warn('[yt] fetch error', e);
+    return '';
+  }
 }
 
-/* ---------------- /api/chat ---------------- */
+// === Тестовая ручка для ручной проверки YouTube-резолва ===
+app.get('/api/yt/resolve', async (req, res) => {
+  try {
+    const q = String(req.query?.q || '').trim();
+    if (!q) return res.status(400).json({ error: 'no q' });
+    const id = await ytSearchFirst(q);
+    if (!id) return res.status(404).json({ error: 'not found' });
+    res.json({ id });
+  } catch (e) {
+    res.status(500).json({ error: 'yt error' });
+  }
+});
+
+// === /api/chat ===
 app.post('/api/chat', async (req, res) => {
   const t0 = Date.now();
   try {
@@ -351,9 +350,8 @@ app.post('/api/chat', async (req, res) => {
     const clientHist = Array.isArray(req.body?.history) ? req.body.history : [];
     if (!userText) return res.json({ reply: 'Скажи, что включить.', actions: [] });
 
-    // Скомбинируем историю и уберём дубли
     const srvHist = memory.get(sid) || [];
-    const combined = [...srvHist, ...clientHist.slice(-MAX_SRV_HISTORY)];
+    const combined = [...srvHist, ...clientHist.slice(-8)];
     const dedup = [];
     const seen = new Set();
     for (const m of combined) {
@@ -391,7 +389,7 @@ app.post('/api/chat', async (req, res) => {
       }
     }
 
-    // 4) enrichment: recommend+autoplay → play{ query } + (опционально) YouTube id
+    // 4) enrichment: recommend/autoplay -> play.query; затем play.query -> play.id (если есть ключ)
     let actions = Array.isArray(data.actions) ? data.actions : [];
     const out = [];
 
@@ -435,6 +433,7 @@ app.post('/api/chat', async (req, res) => {
       return map.get(g) || (g ? `${g} music playlist` : 'music playlist');
     };
 
+    // step A: нормализуем recommend/autoplay -> play.query
     for (const a of actions) {
       if (a?.type === 'recommend' && a.like && a.autoplay) {
         out.push({ type:'play', id:a.id||'', query: ensureLikeQuery(a.like) || a.like });
@@ -451,10 +450,12 @@ app.post('/api/chat', async (req, res) => {
       out.push(a);
     }
 
+    // step B: play.query -> play.id (через YouTube Data API)
     const enriched = [];
     for (const a of out) {
-      if (a?.type === 'play' && !a.id && a.query && YT_API_KEY) {
+      if (a?.type === 'play' && !a.id && a.query && YT_ENABLED) {
         const id = await ytSearchFirst(a.query);
+        if (DEBUG_INTENT) console.log('[yt:resolve]', a.query, '->', id);
         enriched.push(id ? { ...a, id } : a);
       } else {
         enriched.push(a);
@@ -462,7 +463,7 @@ app.post('/api/chat', async (req, res) => {
     }
     actions = enriched;
 
-    // 5) FINAL GUARD: никогда не возвращаем actions: []
+    // 5) final guard
     if (!actions.length) {
       actions = [{ type:'mixradio' }];
       if (!data.reply) data.reply = 'Включаю микс-радио.';
@@ -472,7 +473,7 @@ app.post('/api/chat', async (req, res) => {
     pushHistory(sid, 'user', userText);
     pushHistory(sid, 'assistant', JSON.stringify({ reply: data.reply, actions }));
 
-    console.log(`[chat] ${Date.now()-t0}ms  a=${actions.length}  err=${data._error||''}`);
+    console.log(`[chat] ${Date.now()-t0}ms  a=${actions.length}  yt=${YT_ENABLED}  err=${data._error||''}`);
     res.json({ reply: data.reply || 'Готово.', explain: data.explain || '', actions });
   } catch (e) {
     console.error('[chat] ERROR', e);
@@ -480,7 +481,40 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
+// === Piper TTS (опц.) ===
+app.post('/api/tts', async (req, res) => {
+  try {
+    const text = String(req.body?.text || '').trim();
+    if (!text) return res.status(400).json({ error: 'no text' });
+
+    // Если голос не задан — вежливо сообщаем (фронт свалится на браузерный TTS)
+    if (!PIPER_VOICE) return res.status(501).json({ error: 'piper voice not configured' });
+
+    const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'tts-'));
+    const out = path.join(tmp, 'out.wav');
+    const args = ['--model', PIPER_VOICE, '--output_file', out, '--text', text];
+
+    const proc = spawn(PIPER_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let errBuf = '';
+    proc.stderr.on('data', (d) => { errBuf += d.toString(); });
+
+    proc.on('exit', (code) => {
+      if (code !== 0) {
+        console.warn('[tts] piper exit', code, errBuf);
+        return res.status(500).json({ error: 'piper failed', detail: errBuf.slice(0,300) });
+      }
+      res.setHeader('Content-Type', 'audio/wav');
+      const s = fs.createReadStream(out);
+      s.on('close', () => fs.promises.rm(tmp, { recursive: true, force: true }).catch(()=>{}));
+      s.pipe(res);
+    });
+  } catch (e) {
+    console.error('[tts] error', e);
+    res.status(500).json({ error: 'tts error' });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`AI server on http://localhost:${PORT}`);
-  console.log(`Using model="${OPENAI_MODEL}" via ${OPENAI_BASE_URL}  (${VERSION})`);
+  console.log(`Using model="${OPENAI_MODEL}" via ${OPENAI_BASE_URL} (${VERSION})  YT_ENABLED=${YT_ENABLED}`);
 });
