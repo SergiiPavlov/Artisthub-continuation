@@ -2,12 +2,17 @@
 /* global YT */
 
 /**
- * Mini YouTube player (superset, v2.1.1)
+ * Mini YouTube player (superset, v2.2.0)
  * — сохраняет ВСЁ из твоей версии (UI, bubble, drag-n-dock, прогресс, mute, volume)
  * — добавляет: playSearch(query) + гидратацию очереди из YT-плейлиста
  * — next/prev умеют работать и при search-плейлисте (fallback на yt.next/previousVideo)
  * — не ломает публичное API: openQueue, play, pause, stop, next, prev, setVolume/getVolume, minimize/expand
  * — эмитит совместимые события AM.player.* (ready/state/error/minimized/expanded/track)
+ *
+ * v2.2.0 — правки:
+ * 1) getYouTubeId: строгая валидация ID из /embed|shorts|v/.
+ * 2) open: при невалидном ID/URL — мягкий fallback в playSearch (без "Invalid video id").
+ * 3) playSearch: index:0 и мягкая стабилизация старта.
  */
 
 let _instance = null;
@@ -35,15 +40,20 @@ function loadYTAPI() {
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
 function getYouTubeId(urlOrId) {
   if (!urlOrId) return "";
-  if (/^[\w-]{11}$/.test(urlOrId)) return urlOrId;
+  const s = String(urlOrId).trim();
+  if (/^[A-Za-z0-9_-]{11}$/.test(s)) return s;
   try {
-    const u = new URL(urlOrId, location.href);
-    if (/(^|\.)youtu\.be$/i.test(u.hostname)) return u.pathname.slice(1);
+    const u = new URL(s, location.href);
+    if (/(^|\.)youtu\.be$/i.test(u.hostname)) {
+      const cand = u.pathname.replace(/^\/+/, "");
+      return /^[A-Za-z0-9_-]{11}$/.test(cand) ? cand : "";
+    }
     const v = u.searchParams.get("v");
-    if (v && /^[\w-]{11}$/.test(v)) return v;
-    const m = u.pathname.match(/\/(embed|shorts|v)\/([^/?#]+)/i);
-    return m ? m[2] : "";
-  } catch { return ""; }
+    if (v && /^[A-Za-z0-9_-]{11}$/.test(v)) return v;
+    const m = u.pathname.match(/\/(?:embed|shorts|v)\/([^/?#]+)/i);
+    if (m && m[1] && /^[A-Za-z0-9_-]{11}$/.test(m[1])) return m[1]; // 🔧 строгая проверка
+  } catch { /* ignore */ }
+  return "";
 }
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const shuffleArr = (arr) => {
@@ -564,7 +574,12 @@ export function createMiniPlayer() {
   /* ---------- Публичное API ---------- */
   async function open(urlOrId) {
     const id = getYouTubeId(urlOrId);
-    if (!id) return;
+    if (!id) {
+      // 🔧 Мягкий fallback: если пришёл невалидный ID/URL — трактуем как поиск
+      const q = String(urlOrId || "").trim();
+      if (q) return playSearch(q);
+      return;
+    }
     queue = [id]; qi = 0;
     uiMin(false); uiShow(true); restoreDockPos();
     await playByIndex(0, { reveal: true });
@@ -633,7 +648,8 @@ export function createMiniPlayer() {
     uiMin(false); uiShow(true); restoreDockPos();
     await ensureYT(null);
     try {
-      yt.loadPlaylist({ listType: "search", list: q });
+      // 🔧 Явно указываем index:0
+      yt.loadPlaylist({ listType: "search", list: q, index: 0 });
       yt.playVideo?.();
       clearSearchWatch();
       searchWatchdogId = setTimeout(() => {
@@ -643,13 +659,14 @@ export function createMiniPlayer() {
           if (st !== YT.PlayerState.PLAYING) yt.playVideo?.();
         } catch {}
       }, 1000);
-      queue = []; qi = -1;
+      queue = []; qi = -1; // очередь гидратится позже из yt.getPlaylist()
       aYTlink.href = "#";
       uiPlayIcon(true);
       setBubblePulse(true);
       startTimer();
     } catch (e) {
-      try { yt.cuePlaylist?.({ listType: "search", list: q }); yt.playVideo?.(); } catch {}
+      console.warn("[player.playSearch] loadPlaylist failed, try cuePlaylist()", e);
+      try { yt.cuePlaylist?.({ listType: "search", list: q, index: 0 }); yt.playVideo?.(); } catch {}
     }
   }
 
