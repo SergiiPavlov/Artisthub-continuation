@@ -2,12 +2,19 @@
 /* global YT */
 
 /**
- * Mini YouTube player (superset)
- * — сохраняет все фичи твоей последней версии
- * — добавляет публичные методы: play/pause/stop/setVolume/getVolume/expand
+ * Mini YouTube player (superset, v2)
+ * — сохраняет ВСЁ из твоей версии (UI, bubble, drag-n-dock, прогресс, mute, volume)
+ * — добавляет публичный метод: playSearch(query) — играет по поиску (без API ключа)
+ * — не ломает публичное API: openQueue, play, pause, stop, next, prev, setVolume/getVolume, minimize/expand
+ * — эмитит совместимые события AM.player.* (ready/state/error)
  */
 
 let _instance = null;
+
+/* -------------------- Events (совместимость) -------------------- */
+function emit(name, detail = {}) {
+  try { window.dispatchEvent(new CustomEvent(`AM.player.${name}`, { detail })); } catch {}
+}
 
 /* -------------------- YT API -------------------- */
 function loadYTAPI() {
@@ -259,11 +266,13 @@ export function createMiniPlayer() {
     } else {
       hideBubble();
     }
+    emit("state", { active: !!on });
   }
   function uiMin(on) {
     dock.classList.toggle("am-player--min", !!on);
     if (on) showBubble(true);
     else hideBubble();
+    emit(on ? "minimized" : "expanded", {});
   }
 
   function uiSetTime(cur, dur) {
@@ -290,64 +299,68 @@ export function createMiniPlayer() {
   /* ---------- YT ---------- */
   function skipWithDelay(ms = 2000) { setTimeout(autoNext, ms); }
 
-  function ensureYT(id) {
-    return loadYTAPI().then(() => {
-      if (yt) { try { yt.destroy(); } catch {} yt = null; }
-      host.innerHTML = `<div id="am-player-yt"></div>`;
-      yt = new YT.Player("am-player-yt", {
-        host: "https://www.youtube-nocookie.com",
-        videoId: id,
-        playerVars: { autoplay: 1, rel: 0, modestbranding: 1, controls: 1, enablejsapi: 1, origin: location.origin },
-        events: {
-          onReady: () => {
-            ready = true;
-            duration = yt.getDuration() || 0;
-            uiSetTime(0, duration);
-            if (!isIOS && typeof yt.setVolume === "function") yt.setVolume(volVal);
-            if (muted && yt.mute) yt.mute();
-            uiPlayIcon(true);
-            setBubblePulse(true);
-            setBubbleAmp(volVal);
-            startTimer();
+  async function ensureYT(initialVideoId) {
+    await loadYTAPI();
+    if (yt) { try { yt.destroy(); } catch {} yt = null; }
+    host.innerHTML = `<div id="am-player-yt"></div>`;
+    yt = new YT.Player("am-player-yt", {
+      host: "https://www.youtube-nocookie.com",
+      videoId: initialVideoId || undefined, // позволяет создать без видео
+      playerVars: { autoplay: initialVideoId ? 1 : 0, rel: 0, modestbranding: 1, controls: 1, enablejsapi: 1, origin: location.origin },
+      events: {
+        onReady: () => {
+          ready = true;
+          duration = yt.getDuration() || 0;
+          uiSetTime(0, duration);
+          if (!isIOS && typeof yt.setVolume === "function") yt.setVolume(volVal);
+          if (muted && yt.mute) yt.mute();
+          uiPlayIcon(!!initialVideoId);
+          setBubblePulse(!!initialVideoId);
+          setBubbleAmp(volVal);
+          startTimer();
+          emit("ready", {});
 
-            clearWatchdog();
+          // watchdog включаем только если сразу пытались играть конкретное видео
+          clearWatchdog();
+          if (initialVideoId) {
             watchdogId = setTimeout(() => {
               try {
                 if (yt && yt.getPlayerState && yt.getPlayerState() !== YT.PlayerState.PLAYING) {
-                  // Видео не стартовало (блок/ограничение) — сразу на следующее
                   setBubblePulse(false);
                   skipWithDelay(0);
                 }
               } catch {}
             }, 6000);
-          },
-          onStateChange: (e) => {
-            if (e.data === YT.PlayerState.PLAYING) {
-              clearWatchdog();
-              uiPlayIcon(true);
-              setBubblePulse(true);
-              startTimer();
-            } else if (e.data === YT.PlayerState.PAUSED) {
-              uiPlayIcon(false);
-              setBubblePulse(false);
-              clearTimer();
-            } else if (e.data === YT.PlayerState.ENDED) {
-              uiPlayIcon(false);
-              setBubblePulse(false);
-              clearTimer();
-              clearWatchdog();
-              autoNext();
-            }
-          },
-          onError: () => {
+          }
+        },
+        onStateChange: (e) => {
+          emit("state", { state: e.data });
+          if (e.data === YT.PlayerState.PLAYING) {
+            clearWatchdog();
+            uiPlayIcon(true);
+            setBubblePulse(true);
+            startTimer();
+          } else if (e.data === YT.PlayerState.PAUSED) {
+            uiPlayIcon(false);
+            setBubblePulse(false);
+            clearTimer();
+          } else if (e.data === YT.PlayerState.ENDED) {
             uiPlayIcon(false);
             setBubblePulse(false);
             clearTimer();
             clearWatchdog();
-            skipWithDelay(1200);
+            autoNext();
           }
+        },
+        onError: (e) => {
+          emit("error", { code: e?.data || 'unknown' });
+          uiPlayIcon(false);
+          setBubblePulse(false);
+          clearTimer();
+          clearWatchdog();
+          skipWithDelay(1200);
         }
-      });
+      }
     });
   }
 
@@ -544,7 +557,7 @@ export function createMiniPlayer() {
     playByIndex(qi > 0 ? qi - 1 : (loop ? queue.length - 1 : 0), { reveal });
   }
 
-  // === Новые публичные методы (для ассистента) ===
+  // === Новые публичные методы ===
   function play() {
     if (yt && ready) { yt.playVideo?.(); uiPlayIcon(true); setBubblePulse(true); return; }
     if (queue.length) { playByIndex(qi < 0 ? 0 : qi, { reveal: false }); return; }
@@ -574,12 +587,38 @@ export function createMiniPlayer() {
   function hasQueue()     { return Array.isArray(queue) && queue.length > 0; }
   function close()        { btnClose.click(); }
 
+  /**
+   * NEW: играет по поисковому запросу (без API-ключа).
+   * Использует YT Iframe API: loadPlaylist({ listType:'search', list: query }).
+   * Сбрасывает текущую очередь ID (т.к. теперь играет «поисковая» плейлиста).
+   */
+  async function playSearch(query) {
+    const q = String(query || "").trim();
+    if (!q) return;
+    uiMin(false); uiShow(true); restoreDockPos();
+    // создаём/готовим плеер без начального видео
+    await ensureYT(null);
+    try {
+      yt.loadPlaylist({ listType: "search", list: q });
+      queue = []; qi = -1;
+      aYTlink.href = "#";
+      uiPlayIcon(true);
+      setBubblePulse(true);
+      startTimer();
+    } catch (e) {
+      // если вдруг провал — не ломаем UX
+      try { yt.cuePlaylist?.({ listType: "search", list: q }); yt.playVideo?.(); } catch {}
+    }
+  }
+
   _instance = {
+    // очередь по ID/URL
     open, openQueue, next, prev,
-    // новые
+    // базовые
     play, pause, stop, setVolume: setVolume01, getVolume: getVolume01, expand,
-    // старые
-    minimize, isActive, isMinimized, hasQueue, close
+    minimize, isActive, isMinimized, hasQueue, close,
+    // новое
+    playSearch
   };
   return _instance;
 }

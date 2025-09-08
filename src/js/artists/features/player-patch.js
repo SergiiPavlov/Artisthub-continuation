@@ -1,99 +1,162 @@
-// src/js/artists/features/player-patch.js
-// Фиксы: ни одного passive-listener там, где вызывается preventDefault,
-// + корректное перетаскивание пузыря без "залипания".
+// src/js/features/player-patch.js (compat v2.1)
+// Мост ассистента <-> плеера. Совместим с default-экспортом и с createMiniPlayer().
+// Слушает assistant:* и на window, и на document. Диспетч тоже в обе стороны.
 
-export default function mountPlayerPatch(player) {
-  // Базовые элементы
-  const dock = document.querySelector(".am-player");
-  if (!dock) return;
+import * as PlayerMod from './player.js';
+const Player = PlayerMod.default
+  || (typeof PlayerMod.createMiniPlayer === 'function' ? PlayerMod.createMiniPlayer() : PlayerMod);
 
-  const bubble = document.querySelector(".am-player__bubble");
-  const dragzone = document.querySelector(".am-player__dragzone");
-
-  // Разрешаем кастомные жесты без прокрутки страницы
-  [bubble, dragzone].forEach((el) => {
-    if (el) el.style.touchAction = "none";
-  });
-
-  // Используем не-passive слушатели там, где можем вызвать preventDefault
-  const NP = { passive: false };
-
-  // Универсальная точка старта перетаскивания: либо сам bubble, либо dragzone
-  const handle = bubble || dragzone;
-  if (!handle) return;
-
-  let dragging = false;
-  let startX = 0, startY = 0;
-  let baseLeft = 0, baseTop = 0;
-
-  // вспомогательно: координаты из pointer/touch/mouse события
-  const point = (ev) => {
-    if (ev.touches && ev.touches[0]) {
-      return { x: ev.touches[0].clientX, y: ev.touches[0].clientY };
-    }
-    if (ev.changedTouches && ev.changedTouches[0]) {
-      return { x: ev.changedTouches[0].clientX, y: ev.changedTouches[0].clientY };
-    }
-    return { x: ev.clientX, y: ev.clientY };
-  };
-
-  const onDown = (ev) => {
-    const p = point(ev);
-    startX = p.x;
-    startY = p.y;
-
-    // Будем таскать именно пузырь, а не весь док
-    const target = bubble || dock;
-    const rect = target.getBoundingClientRect();
-    baseLeft = rect.left;
-    baseTop  = rect.top;
-
-    dragging = true;
-
-    // предотвращаем прокрутку страницы во время drag
-    if (ev.cancelable) ev.preventDefault();
-
-    window.addEventListener("touchmove", onMove, NP);
-    window.addEventListener("mousemove", onMove, NP);
-    window.addEventListener("touchend", onUp, NP);
-    window.addEventListener("mouseup", onUp, NP);
-  };
-
-  const onMove = (ev) => {
-    if (!dragging) return;
-
-    const p = point(ev);
-    const dx = p.x - startX;
-    const dy = p.y - startY;
-
-    const target = bubble || dock;
-    const w = target.offsetWidth || 0;
-    const h = target.offsetHeight || 0;
-
-    // позиционируем как fixed-элемент (центрируем по точке)
-    target.style.position = "fixed";
-    target.style.left = `${Math.round(baseLeft + dx)}px`;
-    target.style.top  = `${Math.round(baseTop  + dy)}px`;
-    target.style.right = "auto";
-    target.style.bottom = "auto";
-
-    if (ev.cancelable) ev.preventDefault();
-  };
-
-  const onUp = (ev) => {
-    dragging = false;
-    window.removeEventListener("touchmove", onMove, NP);
-    window.removeEventListener("mousemove", onMove, NP);
-    window.removeEventListener("touchend", onUp, NP);
-    window.removeEventListener("mouseup", onUp, NP);
-    if (ev.cancelable) ev.preventDefault();
-  };
-
-  // Ставим слушатели с НЕ-passive опцией
-  handle.addEventListener("touchstart", onDown, NP);
-  handle.addEventListener("mousedown", onDown, NP);
-
-  // Дополнительно: если плеер свёрнут, клики/скролл должны проходить "сквозь"
-  // сам док, но оставаться на пузыре.
-  dock.classList.add("am-player--patch-applied");
+function dispatchAssistant(name, payload = {}) {
+  const evInit = { detail: payload, bubbles: true, composed: true };
+  window.dispatchEvent(new CustomEvent(`assistant:${name}`, evInit));
+  document.dispatchEvent(new CustomEvent(`assistant:${name}`, evInit));
 }
+
+function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
+
+// Seeds for mixradio (fallback if app has no internal pool)
+const MIX_SEEDS = [
+  'random music mix',
+  'popular hits playlist',
+  'indie rock mix',
+  'classic rock hits',
+  'lofi chill beats to relax',
+  'jazz essentials playlist',
+  'hip hop classic mix',
+  'ambient focus music long'
+];
+
+export function handleAssistantAction(a) {
+  if (!a || typeof a !== 'object') return;
+
+  switch (a.type) {
+    case 'play': {
+      // Prefer id, else query via search playlist
+      if (a.id) {
+        dispatchAssistant('play', { id: a.id, query: a.query || '' });
+        if (typeof Player.open === 'function') Player.open(String(a.id));
+        else if (typeof Player.play === 'function') Player.play(String(a.id));
+      } else if (a.query) {
+        dispatchAssistant('play', { id: '', query: String(a.query) });
+        if (typeof Player.playSearch === 'function') Player.playSearch(String(a.query));
+        else {
+          // мягкий фоллбек: если нет playSearch, просто эмитим событие — его может подхватить другой модуль
+          dispatchAssistant('play-search-missing', { query: String(a.query) });
+        }
+      }
+      break;
+    }
+    case 'recommend': {
+      // Backward compatibility: some servers may still send recommend + autoplay
+      const wantAuto = a.autoplay === true;
+      if (wantAuto) {
+        let q = '';
+        if (a.like) q = `${a.like} official audio`;
+        else if (a.genre) {
+          const map = new Map([
+            ['джаз', 'best jazz music relaxing'],
+            ['рок', 'classic rock hits'],
+            ['поп', 'pop hits playlist'],
+            ['электрон', 'edm house techno mix'],
+            ['lofi', 'lofi hip hop radio'],
+            ['классик', 'classical symphony playlist'],
+            ['рэп', 'hip hop playlist'],
+            ['инди', 'indie rock playlist'],
+            ['ambient', 'ambient music long playlist'],
+            ['блюз', 'best blues songs playlist'],
+            ['шансон', 'russian chanson mix'],
+            ['folk', 'folk acoustic playlist'],
+            ['rnb', 'rnb soul classics playlist'],
+            ['latin', 'latin hits playlist'],
+            ['reggae', 'best reggae mix'],
+            ['k-pop', 'kpop hits playlist'],
+            ['j-pop', 'jpop hits playlist'],
+            ['soundtrack', 'movie soundtrack playlist'],
+          ]);
+          q = map.get(String(a.genre).toLowerCase()) || `${a.genre} music playlist`;
+        } else if (a.mood) {
+          const moods = new Map([
+            ['happy','upbeat feel good hits'],
+            ['calm','lofi chill beats to relax'],
+            ['sad','sad emotional songs playlist'],
+            ['energetic','high energy workout rock mix'],
+          ]);
+          q = moods.get(String(a.mood).toLowerCase()) || 'music playlist';
+        }
+        if (q) {
+          dispatchAssistant('recommend', { ...a, query: q });
+          if (typeof Player.playSearch === 'function') Player.playSearch(q);
+          else dispatchAssistant('play-search-missing', { query: q });
+        }
+      } else {
+        // just emit event for UI
+        dispatchAssistant('recommend', { ...a });
+      }
+      break;
+    }
+    case 'mixradio': {
+      const rand = MIX_SEEDS[Math.floor(Math.random()*MIX_SEEDS.length)];
+      dispatchAssistant('mixradio', { query: rand });
+      if (typeof Player.playSearch === 'function') Player.playSearch(rand);
+      else dispatchAssistant('play-search-missing', { query: rand });
+      break;
+    }
+    case 'player': {
+      const act = String(a.action || '').toLowerCase();
+      dispatchAssistant(`player-${act}`, {});
+      if (act === 'play'  && typeof Player.play  === 'function') Player.play();
+      if (act === 'pause' && typeof Player.pause === 'function') Player.pause();
+      if (act === 'stop'  && typeof Player.stop  === 'function') Player.stop();
+      if (act === 'next'  && typeof Player.next  === 'function') Player.next();
+      if (act === 'prev'  && typeof Player.prev  === 'function') Player.prev();
+      break;
+    }
+    case 'volume': {
+      const d = Number(a.delta || 0);
+      dispatchAssistant('volume', { delta: d });
+      if (typeof Player.setVolume === 'function') Player.setVolume(clamp(d, -1, 1));
+      break;
+    }
+    case 'ui': {
+      const act = String(a.action || '').toLowerCase();
+      if (act === 'minimize') {
+        dispatchAssistant('minimize', {});
+        if (typeof Player.minimize === 'function') Player.minimize();
+      } else if (act === 'expand') {
+        dispatchAssistant('expand', {});
+        if (typeof Player.expand === 'function') Player.expand();
+      }
+      break;
+    }
+    default:
+      // unknown action type — ignore silently
+      break;
+  }
+}
+
+// Listen legacy assistant:* events from UI and control the player (backward compatibility)
+function on(target, type, fn) { target.addEventListener(type, fn); }
+
+on(window,   'assistant:play',  (e)=> { const {id, query} = e.detail || {}; id ? (Player.open?.(id) || Player.play?.(id)) : (query && Player.playSearch?.(query)); });
+on(document, 'assistant:play',  (e)=> { const {id, query} = e.detail || {}; id ? (Player.open?.(id) || Player.play?.(id)) : (query && Player.playSearch?.(query)); });
+
+on(window,   'assistant:mixradio', ()=> { const q = MIX_SEEDS[Math.floor(Math.random()*MIX_SEEDS.length)]; Player.playSearch?.(q); });
+on(document, 'assistant:mixradio', ()=> { const q = MIX_SEEDS[Math.floor(Math.random()*MIX_SEEDS.length)]; Player.playSearch?.(q); });
+
+on(window,   'assistant:player-play',  ()=> Player.play?.());
+on(document, 'assistant:player-play',  ()=> Player.play?.());
+on(window,   'assistant:player-pause', ()=> Player.pause?.());
+on(document, 'assistant:player-pause', ()=> Player.pause?.());
+on(window,   'assistant:player-stop',  ()=> Player.stop?.());
+on(document, 'assistant:player-stop',  ()=> Player.stop?.());
+on(window,   'assistant:player-next',  ()=> Player.next?.());
+on(document, 'assistant:player-next',  ()=> Player.next?.());
+on(window,   'assistant:player-prev',  ()=> Player.prev?.());
+on(document, 'assistant:player-prev',  ()=> Player.prev?.());
+
+on(window,   'assistant:minimize',     ()=> Player.minimize?.());
+on(document, 'assistant:minimize',     ()=> Player.minimize?.());
+on(window,   'assistant:expand',       ()=> Player.expand?.());
+on(document, 'assistant:expand',       ()=> Player.expand?.());
+
+export default { handleAssistantAction };

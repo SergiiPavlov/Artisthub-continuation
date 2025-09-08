@@ -226,8 +226,13 @@
   }
 
   function dispatch(name, detail = {}) {
-    document.dispatchEvent(new CustomEvent(`assistant:${name}`, { detail }));
+    const evInit = { detail, bubbles: true, composed: true };
+    // 1) document — как было
+    document.dispatchEvent(new CustomEvent(`assistant:${name}`, evInit));
+    // 2) window — чтобы поймали слушатели на window
+    window.dispatchEvent(new CustomEvent(`assistant:${name}`, evInit));
   }
+
   function runActions(actions = []) {
     for (const a of actions) {
       if (a?.type === "player" && a.action) {
