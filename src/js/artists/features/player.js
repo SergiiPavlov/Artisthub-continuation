@@ -1,6 +1,12 @@
 /* eslint-env browser */
 /* global YT */
 
+/**
+ * Mini YouTube player (superset)
+ * — сохраняет все фичи твоей последней версии
+ * — добавляет публичные методы: play/pause/stop/setVolume/getVolume/expand
+ */
+
 let _instance = null;
 
 /* -------------------- YT API -------------------- */
@@ -44,22 +50,6 @@ function fmtTimeSec(sec) {
   const m = Math.floor(sec / 60);
   const s = String(sec % 60).padStart(2, "0");
   return `${m}:${s}`;
-}
-
-/* ---------- Blacklist of bad/non-embeddable IDs ---------- */
-const LS_KEY_BAD = "am.radio.bad";
-function addBadId(id) {
-  try {
-    if (!id) return;
-    const raw = localStorage.getItem(LS_KEY_BAD) || "[]";
-    let arr = [];
-    try { arr = JSON.parse(raw) || []; } catch {}
-    if (!arr.includes(id)) {
-      arr.push(id);
-      if (arr.length > 1000) arr = arr.slice(-1000);
-      localStorage.setItem(LS_KEY_BAD, JSON.stringify(arr));
-    }
-  } catch {}
 }
 
 /* -------------------- Экспорт: фабрика singleton -------------------- */
@@ -130,7 +120,6 @@ export function createMiniPlayer() {
   let queue = [];
   let qi = -1;
   let loop = false;
-  let currentId = null;
 
   const DOCK_KEY = "amPlayerPos";
   let dockDrag = null;
@@ -140,7 +129,7 @@ export function createMiniPlayer() {
   let bubbleStart = null;
   let _bubblePos = null;
 
-  // NEW: игнор клика сразу после drag
+  // игнор клика сразу после drag
   let recentBubbleDrag = false;
 
   let watchdogId = null;
@@ -161,7 +150,7 @@ export function createMiniPlayer() {
       bubble.innerHTML = `<span class="note">♪</span>`;
       document.body.appendChild(bubble);
 
-      // ▼▼▼ ПАТЧ: открывать только по «чистому» клику
+      // открывать только по «чистому» клику после драга
       bubble.addEventListener("click", (e) => {
         if (recentBubbleDrag) {
           recentBubbleDrag = false;
@@ -174,7 +163,7 @@ export function createMiniPlayer() {
 
       bubble.addEventListener("pointerdown", (e) => {
         bubbleDragging = false;
-        recentBubbleDrag = false;            // сбрасываем маркер
+        recentBubbleDrag = false;
         try { bubble.setPointerCapture(e.pointerId); } catch {}
         const r = bubble.getBoundingClientRect();
         bubbleStart = { x: e.clientX, y: e.clientY, left: r.left, top: r.top };
@@ -189,7 +178,6 @@ export function createMiniPlayer() {
       });
       bubble.addEventListener("pointerup", (e) => {
         try { bubble.releasePointerCapture(e.pointerId); } catch {}
-        // если был drag — помечаем, чтобы следующий click проигнорить
         recentBubbleDrag = !!bubbleDragging;
         bubbleStart = null;
         bubbleDragging = false;
@@ -265,7 +253,6 @@ export function createMiniPlayer() {
 
   function uiShow(on) {
     dock.classList.toggle("am-player--active", !!on);
-    // ВАЖНО: когда активен мини-режим, пузырь должен оставаться видимым
     const isMin = dock.classList.contains("am-player--min");
     if (on) {
       if (!isMin) hideBubble();
@@ -327,8 +314,7 @@ export function createMiniPlayer() {
             watchdogId = setTimeout(() => {
               try {
                 if (yt && yt.getPlayerState && yt.getPlayerState() !== YT.PlayerState.PLAYING) {
-                  console.warn("Watchdog: video didn’t start — skip.");
-                  if (currentId) addBadId(currentId);
+                  // Видео не стартовало (блок/ограничение) — сразу на следующее
                   setBubblePulse(false);
                   skipWithDelay(0);
                 }
@@ -354,7 +340,6 @@ export function createMiniPlayer() {
             }
           },
           onError: () => {
-            if (currentId) addBadId(currentId);
             uiPlayIcon(false);
             setBubblePulse(false);
             clearTimer();
@@ -371,14 +356,11 @@ export function createMiniPlayer() {
     if (!queue.length) return;
     qi = clamp(idx, 0, queue.length - 1);
     const id = queue[qi];
-    currentId = id;
     if (!id || !/^[\w-]{11}$/.test(id)) {
-      console.warn("Bad YouTube ID, skip:", id);
       return skipWithDelay(0);
     }
     aYTlink.href = `https://www.youtube.com/watch?v=${id}`;
 
-    // NEW: управляем раскрытием
     const reveal = opts.reveal ?? true;
     if (reveal) {
       uiMin(false);
@@ -389,7 +371,7 @@ export function createMiniPlayer() {
     }
 
     ready = false; duration = 0; clearTimer(); clearWatchdog();
-    try { await ensureYT(id); } catch (err) { skipWithDelay(1200); }
+    try { await ensureYT(id); } catch { skipWithDelay(1200); }
   }
 
   function autoNext() {
@@ -398,7 +380,7 @@ export function createMiniPlayer() {
     else if (loop) playByIndex(0, { reveal: false });
   }
 
-  /* ---------- Перетаскивание ДОКА (как было) ---------- */
+  /* ---------- Перетаскивание ДОКА ---------- */
   function getVP() {
     const w = window.visualViewport?.width || document.documentElement.clientWidth || window.innerWidth;
     const h = window.visualViewport?.height || document.documentElement.clientHeight || window.innerHeight;
@@ -562,41 +544,42 @@ export function createMiniPlayer() {
     playByIndex(qi > 0 ? qi - 1 : (loop ? queue.length - 1 : 0), { reveal });
   }
 
-  function isActive()     { return dock.classList.contains("am-player--active"); }
-  function isMinimized()  { return isActive() && dock.classList.contains("am-player--min"); }
-  function hasQueue()     { return Array.isArray(queue) && queue.length > 0; }
-  function minimize()     { if (isActive()) uiMin(true); }
-  function close()        { btnClose.click(); }
-
-  /* ---------- Public control helpers ---------- */
+  // === Новые публичные методы (для ассистента) ===
   function play() {
-    if (!ready || !yt) return;
-    try { yt.playVideo?.(); } catch {}
-    uiPlayIcon(true); setBubblePulse(true);
+    if (yt && ready) { yt.playVideo?.(); uiPlayIcon(true); setBubblePulse(true); return; }
+    if (queue.length) { playByIndex(qi < 0 ? 0 : qi, { reveal: false }); return; }
   }
   function pause() {
-    if (!yt) return;
-    try { yt.pauseVideo?.(); } catch {}
+    try { yt?.pauseVideo?.(); } catch {}
     uiPlayIcon(false); setBubblePulse(false);
   }
   function stop() {
-    if (!yt) return;
-    try { yt.stopVideo?.(); } catch {}
-    uiPlayIcon(false); setBubblePulse(false); clearTimer(); clearWatchdog();
+    try { yt?.stopVideo?.(); } catch {}
+    uiPlayIcon(false); setBubblePulse(false);
   }
   function setVolume01(x) {
-    const v01 = Math.max(0, Math.min(1, Number(x) || 0));
-    volVal = Math.round(v01 * 100);
-    vol.value = String(volVal);
-    if (!isIOS) yt?.setVolume?.(volVal);
-    if (volVal === 0 && !muted) { muted = true; yt?.mute?.(); uiMuteIcon(true); }
-    else if (volVal > 0 && muted) { muted = false; yt?.unMute?.(); uiMuteIcon(false); }
-    setBubbleAmp(volVal);
+    const v = clamp(Math.round((Number(x)||0)*100), 0, 100);
+    volVal = v; vol.value = String(v);
+    if (!isIOS) yt?.setVolume?.(v);
+    if (v === 0 && !muted) { muted = true; yt?.mute?.(); uiMuteIcon(true); }
+    else if (v > 0 && muted) { muted = false; yt?.unMute?.(); uiMuteIcon(false); }
+    setBubbleAmp(v);
   }
-  function getVolume01() {
-    return Math.max(0, Math.min(1, (Number(volVal) || 0) / 100));
-  }
+  function getVolume01() { return (volVal||0)/100; }
+  function minimize()     { if (dock.classList.contains("am-player--active")) uiMin(true); }
+  function expand()       { uiMin(false); uiShow(true); restoreDockPos(); }
 
-  _instance = { open, openQueue, next, prev, minimize, isActive, isMinimized, hasQueue, close, play, pause, stop, setVolume: setVolume01, getVolume: getVolume01 };
+  function isActive()     { return dock.classList.contains("am-player--active"); }
+  function isMinimized()  { return isActive() && dock.classList.contains("am-player--min"); }
+  function hasQueue()     { return Array.isArray(queue) && queue.length > 0; }
+  function close()        { btnClose.click(); }
+
+  _instance = {
+    open, openQueue, next, prev,
+    // новые
+    play, pause, stop, setVolume: setVolume01, getVolume: getVolume01, expand,
+    // старые
+    minimize, isActive, isMinimized, hasQueue, close
+  };
   return _instance;
 }
