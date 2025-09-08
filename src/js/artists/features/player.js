@@ -2,11 +2,12 @@
 /* global YT */
 
 /**
- * Mini YouTube player (superset, v2)
+ * Mini YouTube player (superset, v2.1.1)
  * — сохраняет ВСЁ из твоей версии (UI, bubble, drag-n-dock, прогресс, mute, volume)
- * — добавляет публичный метод: playSearch(query) — играет по поиску (без API ключа)
+ * — добавляет: playSearch(query) + гидратацию очереди из YT-плейлиста
+ * — next/prev умеют работать и при search-плейлисте (fallback на yt.next/previousVideo)
  * — не ломает публичное API: openQueue, play, pause, stop, next, prev, setVolume/getVolume, minimize/expand
- * — эмитит совместимые события AM.player.* (ready/state/error)
+ * — эмитит совместимые события AM.player.* (ready/state/error/minimized/expanded/track)
  */
 
 let _instance = null;
@@ -37,9 +38,10 @@ function getYouTubeId(urlOrId) {
   if (/^[\w-]{11}$/.test(urlOrId)) return urlOrId;
   try {
     const u = new URL(urlOrId, location.href);
-    if (/youtu\.be$/.test(u.hostname)) return u.pathname.slice(1);
-    if (u.searchParams.get("v")) return u.searchParams.get("v");
-    const m = u.pathname.match(/\/(embed|shorts|v)\/([^/?#]+)/);
+    if (/(^|\.)youtu\.be$/i.test(u.hostname)) return u.pathname.slice(1);
+    const v = u.searchParams.get("v");
+    if (v && /^[\w-]{11}$/.test(v)) return v;
+    const m = u.pathname.match(/\/(embed|shorts|v)\/([^/?#]+)/i);
     return m ? m[2] : "";
   } catch { return ""; }
 }
@@ -59,7 +61,7 @@ function fmtTimeSec(sec) {
   return `${m}:${s}`;
 }
 
-/* -------------------- Экспорт: фабрика singleton -------------------- */
+/* -------------------- Экспортируемая фабрика -------------------- */
 export function createMiniPlayer() {
   if (_instance) return _instance;
 
@@ -140,6 +142,7 @@ export function createMiniPlayer() {
   let recentBubbleDrag = false;
 
   let watchdogId = null;
+  let searchWatchdogId = null;
 
   if (isIOS) {
     vol.disabled = true;
@@ -295,6 +298,19 @@ export function createMiniPlayer() {
     }, 250);
   }
   function clearWatchdog() { if (watchdogId) { clearTimeout(watchdogId); watchdogId = null; } }
+  function clearSearchWatch() { if (searchWatchdogId) { clearTimeout(searchWatchdogId); searchWatchdogId = null; } }
+
+  /* ---------- helpers around YT playlist ---------- */
+  function hydrateFromYTPlaylist() {
+    if (!yt || typeof yt.getPlaylist !== "function") return;
+    try {
+      const pl = yt.getPlaylist() || [];
+      if (Array.isArray(pl) && pl.length) {
+        queue = pl.slice();
+        qi = typeof yt.getPlaylistIndex === "function" ? (yt.getPlaylistIndex() | 0) : 0;
+      }
+    } catch {}
+  }
 
   /* ---------- YT ---------- */
   function skipWithDelay(ms = 2000) { setTimeout(autoNext, ms); }
@@ -305,7 +321,7 @@ export function createMiniPlayer() {
     host.innerHTML = `<div id="am-player-yt"></div>`;
     yt = new YT.Player("am-player-yt", {
       host: "https://www.youtube-nocookie.com",
-      videoId: initialVideoId || undefined, // позволяет создать без видео
+      videoId: initialVideoId || undefined,
       playerVars: { autoplay: initialVideoId ? 1 : 0, rel: 0, modestbranding: 1, controls: 1, enablejsapi: 1, origin: location.origin },
       events: {
         onReady: () => {
@@ -320,7 +336,6 @@ export function createMiniPlayer() {
           startTimer();
           emit("ready", {});
 
-          // watchdog включаем только если сразу пытались играть конкретное видео
           clearWatchdog();
           if (initialVideoId) {
             watchdogId = setTimeout(() => {
@@ -337,18 +352,28 @@ export function createMiniPlayer() {
           emit("state", { state: e.data });
           if (e.data === YT.PlayerState.PLAYING) {
             clearWatchdog();
+            clearSearchWatch();
             uiPlayIcon(true);
             setBubblePulse(true);
             startTimer();
+            try {
+              const url = yt.getVideoUrl?.();
+              if (url) aYTlink.href = url;
+              const vd = yt.getVideoData?.();
+              if (vd && vd.video_id) emit("track", { id: vd.video_id, title: vd.title || "" });
+              hydrateFromYTPlaylist();
+            } catch {}
           } else if (e.data === YT.PlayerState.PAUSED) {
             uiPlayIcon(false);
             setBubblePulse(false);
             clearTimer();
+            emit("pause", {});
           } else if (e.data === YT.PlayerState.ENDED) {
             uiPlayIcon(false);
             setBubblePulse(false);
             clearTimer();
             clearWatchdog();
+            emit("ended", {});
             autoNext();
           }
         },
@@ -358,6 +383,7 @@ export function createMiniPlayer() {
           setBubblePulse(false);
           clearTimer();
           clearWatchdog();
+          clearSearchWatch();
           skipWithDelay(1200);
         }
       }
@@ -388,9 +414,13 @@ export function createMiniPlayer() {
   }
 
   function autoNext() {
-    if (!queue.length) return;
-    if (qi < queue.length - 1) playByIndex(qi + 1, { reveal: false });
-    else if (loop) playByIndex(0, { reveal: false });
+    if (queue.length) {
+      if (qi < queue.length - 1) playByIndex(qi + 1, { reveal: false });
+      else if (loop) playByIndex(0, { reveal: false });
+      else if (yt && yt.nextVideo) yt.nextVideo();
+    } else if (yt && yt.nextVideo) {
+      yt.nextVideo();
+    }
   }
 
   /* ---------- Перетаскивание ДОКА ---------- */
@@ -473,7 +503,7 @@ export function createMiniPlayer() {
   /* ---------- Кнопки UI ---------- */
   btnClose.addEventListener("click", () => {
     try { yt?.stopVideo?.(); yt?.destroy?.(); } catch {}
-    yt = null; ready = false; duration = 0; clearTimer(); clearWatchdog();
+    yt = null; ready = false; duration = 0; clearTimer(); clearWatchdog(); clearSearchWatch();
     uiShow(false); uiMin(false);
     queue = []; qi = -1;
     setBubblePulse(false);
@@ -482,7 +512,7 @@ export function createMiniPlayer() {
 
   aYTlink.addEventListener("click", () => {
     try { yt?.stopVideo?.(); yt?.destroy?.(); } catch {}
-    yt = null; ready = false; duration = 0; clearTimer(); clearWatchdog();
+    yt = null; ready = false; duration = 0; clearTimer(); clearWatchdog(); clearSearchWatch();
     uiShow(false); uiMin(false);
     queue = []; qi = -1;
     setBubblePulse(false);
@@ -494,8 +524,14 @@ export function createMiniPlayer() {
     if (s === YT.PlayerState.PLAYING) { yt.pauseVideo?.(); uiPlayIcon(false); setBubblePulse(false); }
     else { yt.playVideo?.(); uiPlayIcon(true); setBubblePulse(true); }
   });
-  btnPrev.addEventListener("click", () => { if (!queue.length) return; playByIndex(qi > 0 ? qi - 1 : (loop ? queue.length - 1 : 0), { reveal: true }); });
-  btnNext.addEventListener("click", () => { if (!queue.length) return; playByIndex(qi < queue.length - 1 ? qi + 1 : (loop ? 0 : qi), { reveal: true }); });
+  btnPrev.addEventListener("click", () => {
+    if (queue.length) { playByIndex(qi > 0 ? qi - 1 : (loop ? queue.length - 1 : 0), { reveal: true }); }
+    else { yt?.previousVideo?.(); }
+  });
+  btnNext.addEventListener("click", () => {
+    if (queue.length) { playByIndex(qi < queue.length - 1 ? qi + 1 : (loop ? 0 : qi), { reveal: true }); }
+    else { yt?.nextVideo?.(); }
+  });
 
   btnMute.addEventListener("click", () => {
     if (!yt) return;
@@ -545,19 +581,23 @@ export function createMiniPlayer() {
     await playByIndex(start, { reveal: true });
   }
 
-  // ВАЖНО: next/prev без параметров — НЕ РАСКРЫВАЮТ плеер, если он свёрнут.
   function next() {
-    if (!queue.length) return;
-    const reveal = !dock.classList.contains("am-player--min");
-    playByIndex(qi < queue.length - 1 ? qi + 1 : (loop ? 0 : qi), { reveal });
+    if (queue.length) {
+      const reveal = !dock.classList.contains("am-player--min");
+      playByIndex(qi < queue.length - 1 ? qi + 1 : (loop ? 0 : qi), { reveal });
+    } else {
+      yt?.nextVideo?.();
+    }
   }
   function prev() {
-    if (!queue.length) return;
-    const reveal = !dock.classList.contains("am-player--min");
-    playByIndex(qi > 0 ? qi - 1 : (loop ? queue.length - 1 : 0), { reveal });
+    if (queue.length) {
+      const reveal = !dock.classList.contains("am-player--min");
+      playByIndex(qi > 0 ? qi - 1 : (loop ? queue.length - 1 : 0), { reveal });
+    } else {
+      yt?.previousVideo?.();
+    }
   }
 
-  // === Новые публичные методы ===
   function play() {
     if (yt && ready) { yt.playVideo?.(); uiPlayIcon(true); setBubblePulse(true); return; }
     if (queue.length) { playByIndex(qi < 0 ? 0 : qi, { reveal: false }); return; }
@@ -587,38 +627,61 @@ export function createMiniPlayer() {
   function hasQueue()     { return Array.isArray(queue) && queue.length > 0; }
   function close()        { btnClose.click(); }
 
-  /**
-   * NEW: играет по поисковому запросу (без API-ключа).
-   * Использует YT Iframe API: loadPlaylist({ listType:'search', list: query }).
-   * Сбрасывает текущую очередь ID (т.к. теперь играет «поисковая» плейлиста).
-   */
   async function playSearch(query) {
     const q = String(query || "").trim();
     if (!q) return;
     uiMin(false); uiShow(true); restoreDockPos();
-    // создаём/готовим плеер без начального видео
     await ensureYT(null);
     try {
       yt.loadPlaylist({ listType: "search", list: q });
+      yt.playVideo?.();
+      clearSearchWatch();
+      searchWatchdogId = setTimeout(() => {
+        hydrateFromYTPlaylist();
+        try {
+          const st = yt.getPlayerState?.();
+          if (st !== YT.PlayerState.PLAYING) yt.playVideo?.();
+        } catch {}
+      }, 1000);
       queue = []; qi = -1;
       aYTlink.href = "#";
       uiPlayIcon(true);
       setBubblePulse(true);
       startTimer();
     } catch (e) {
-      // если вдруг провал — не ломаем UX
       try { yt.cuePlaylist?.({ listType: "search", list: q }); yt.playVideo?.(); } catch {}
     }
   }
 
   _instance = {
-    // очередь по ID/URL
     open, openQueue, next, prev,
-    // базовые
     play, pause, stop, setVolume: setVolume01, getVolume: getVolume01, expand,
     minimize, isActive, isMinimized, hasQueue, close,
-    // новое
     playSearch
   };
   return _instance;
 }
+
+/* ---------- ДЕФОЛТНЫЙ ЭКСПОРТ: фасад Player ---------- */
+function get() { return _instance || createMiniPlayer(); }
+
+const Player = {
+  open:       (x) => get().open(x),
+  openQueue:  (l,o) => get().openQueue(l,o),
+  next:       () => get().next(),
+  prev:       () => get().prev(),
+  play:       () => get().play(),
+  pause:      () => get().pause(),
+  stop:       () => get().stop(),
+  setVolume:  (x) => get().setVolume(x),
+  getVolume:  () => get().getVolume(),
+  minimize:   () => get().minimize(),
+  expand:     () => get().expand(),
+  isActive:   () => get().isActive(),
+  isMinimized:() => get().isMinimized(),
+  hasQueue:   () => get().hasQueue(),
+  close:      () => get().close(),
+  playSearch: (q) => get().playSearch(q),
+};
+
+export default Player;

@@ -1,4 +1,5 @@
-/* Chat Friend + AI bridge with memory + Provider + Optional server TTS (Piper) */
+// Chat Friend + AI bridge with memory + Provider + Optional server TTS (Piper)
+// ВНИМАНИЕ: здесь НЕТ импорта player-patch — мост монтируется в artists/index.js
 (() => {
   const API_BASE =
     (import.meta?.env?.VITE_API_URL && import.meta.env.VITE_API_URL.replace(/\/+$/, "")) ||
@@ -18,6 +19,7 @@
     } catch {}
     return "";
   }
+  const isStr = (v) => typeof v === "string" && v.length > 0;
 
   // --- UI ---
   const root = document.createElement("div");
@@ -77,7 +79,7 @@
     </div>`;
   document.body.appendChild(root);
 
-  // quick styles (не трогаю ваш общий chat.css)
+  // quick styles (минимальные, не трогаю общий CSS)
   const style = document.createElement("style");
   style.textContent = `
     .assistant{position:fixed;right:18px;bottom:18px;z-index:9999}
@@ -124,7 +126,7 @@
   // --- memory (короткая) ---
   const chat = {
     history: [],            // [{role:'user'|'assistant', content:string}]
-    lastIds: [],            // последние найденные YT id/urls из ответа ассистента
+    lastIds: [],            // последние YT id/urls, встреченные в ответах
     lastGenre: null,
     lastMood: null
   };
@@ -139,8 +141,8 @@
   function providerToSend() {
     const p = localStorage.getItem('assistant.provider') || 'auto';
     if (p === 'pro')  return 'openai';
-    if (p === 'free') return 'lmstudio'; // по умолчанию БЕСПЛАТНЫЙ — LM Studio
-    return undefined; // auto = пусть решает сервер (env PROVIDER)
+    if (p === 'free') return 'lmstudio';
+    return undefined; // auto
   }
 
   // --- Server TTS pref ---
@@ -203,11 +205,8 @@
 
   function speak(text) {
     const useServer = chkTTS.checked && !!API_BASE;
-    if (useServer) {
-      speakServer(text).catch(() => speakBrowser(text));
-    } else {
-      speakBrowser(text);
-    }
+    if (useServer) speakServer(text).catch(() => speakBrowser(text));
+    else speakBrowser(text);
   }
 
   btnTest?.addEventListener("click", () => speak("Привет! Я твой голосовой друг."));
@@ -225,12 +224,11 @@
     chat.history = chat.history.slice(-10);
   }
 
+  // Диспатчим и на window, и на document — для совместимости
   function dispatch(name, detail = {}) {
-    const evInit = { detail, bubbles: true, composed: true };
-    // 1) document — как было
-    document.dispatchEvent(new CustomEvent(`assistant:${name}`, evInit));
-    // 2) window — чтобы поймали слушатели на window
-    window.dispatchEvent(new CustomEvent(`assistant:${name}`, evInit));
+    const ev = new CustomEvent(`assistant:${name}`, { detail, bubbles:true, composed:true });
+    window.dispatchEvent(ev);
+    document.dispatchEvent(new CustomEvent(`assistant:${name}`, { detail, bubbles:true, composed:true }));
   }
 
   function runActions(actions = []) {
@@ -255,7 +253,7 @@
     }
   }
 
-  // евристика: выцепим ID из текста ответа и сохраним как кандидаты
+  // выцепим ID из текста ответа и сохраним как кандидаты
   function harvestIdsFromReply(txt = "") {
     const ids = new Set();
     const urlRe = /\bhttps?:\/\/(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([A-Za-z0-9_-]{11})\b/g;
@@ -266,30 +264,38 @@
     return Array.from(ids);
   }
 
-  // локальные команды (fallback)
+  // локальные команды (fallback) — ДЕЙСТВИТЕЛЬНЫЕ!
   function handleCommandLocal(t) {
     const text = (t || "").toLowerCase();
-    const wantsPlay = /включ|поставь|play|запусти|запуств/.test(text);
+    const wantsPlay = /включ|поставь|play|запусти/.test(text);
 
     if (/list|список|лист ?вью/.test(text)) { dispatch("view", { mode: "list" }); return "Включаю список"; }
     if (/grid|сетка|карточк/.test(text))   { dispatch("view", { mode: "grid" }); return "Включаю сетку"; }
     if (/next|след/.test(text))            { dispatch("player-next"); return "Следующий трек"; }
     if (/prev|пред/.test(text))            { dispatch("player-prev"); return "Предыдущий трек"; }
     if (/пауза|стоп|pause|останов/.test(text)) { dispatch("player-pause"); dispatch("player-stop"); return "Пауза"; }
-    if (/play|плей|включи/.test(text))     { dispatch("player-play"); return "Играю"; }
+
+    // Ключевая правка: «включи» без уточнений → Mix Radio, если нет последних ID
+    if (/play|плей|включи/.test(text)) {
+      if (chat.lastIds.length) {
+        dispatch("play", { id: chat.lastIds[0] });
+      } else {
+        dispatch("mixradio", { start: true });
+      }
+      return "Играю";
+    }
+
     if (/тише|quieter|volume down|поменьше/.test(text)) { dispatch("volume", { delta: -0.1 }); return "Тише"; }
     if (/громче|louder|volume up|погромче/.test(text))  { dispatch("volume", { delta: +0.1 }); return "Громче"; }
     if (/(mix ?radio|микс|радио|random)/.test(text))    { dispatch("mixradio", { start: true }); return "Mix Radio"; }
 
-    if (/из (этого|того) списка|из предложенного|любой из списка/.test(text)) {
-      if (chat.lastIds.length) {
-        dispatch("play", { id: chat.lastIds[0] });
-        return "Запускаю из последнего списка";
-      }
-      dispatch("mixradio", { start: true });
-      return "Включаю из своих рекомендаций";
+    // Явные запросы на трек/артиста
+    if (/^(?:включи|поставь|запусти|найди|знайди)\s+.+/i.test(text)) {
+      const like = text.replace(/^(?:включи|поставь|запусти|найди|знайди)\s+/i, "").trim();
+      if (like) { dispatch("recommend", { like, autoplay: true }); return "Шукаю та запускаю…"; }
     }
 
+    // Настроение
     const moods = [
       { re: /(весел|радіс|радост|happy|joy)/, mood: "happy" },
       { re: /(спок|calm|chill|relax)/,        mood: "calm" },
@@ -299,13 +305,19 @@
     const m = moods.find(m => m.re.test(text));
     if (m) { dispatch("recommend", { mood: m.mood, autoplay: wantsPlay }); chat.lastMood = m.mood; return wantsPlay ? "Підбираю та вмикаю…" : "Підбираю під настрій"; }
 
+    // Жанр
     const g = text.match(/жанр\s*([a-zа-яёіїє-]+)/i);
     if (g && g[1]) { dispatch("recommend", { genre: g[1], autoplay: wantsPlay }); chat.lastGenre = g[1]; return wantsPlay ? `Жанр ${g[1]}, запускаю…` : `Жанр: ${g[1]}`; }
 
-    const like = text.match(/(?:включи|поставь|запусти|найди|знайди)\s+(.+)/i);
-    if (like && like[1]) { dispatch("recommend", { like: like[1].trim(), autoplay: true }); return "Шукаю та запускаю…"; }
-
-    if (/рекоменд/.test(text) && /включ/.test(text)) { dispatch("mixradio", { start: true }); dispatch("player-play"); return "Включаю из рекомендаций…"; }
+    // «включи из списка»
+    if (/из (этого|того) списка|из предложенного|любой из списка/.test(text)) {
+      if (chat.lastIds.length) {
+        dispatch("play", { id: chat.lastIds[0] });
+        return "Запускаю из последнего списка";
+      }
+      dispatch("mixradio", { start: true });
+      return "Включаю из своих рекомендаций";
+    }
 
     return "Я здесь. Могу переключать вид, управлять треком и подбирать музыку по настроению.";
   }
@@ -332,9 +344,10 @@
 
     log(v, "user");
 
+    // 1) Пытаемся через сервер ИИ
     try {
       const data = await callAI(v);
-      if (data && data.reply) {
+      if (data && isStr(data.reply)) {
         const harvested = harvestIdsFromReply(data.reply);
         if (harvested.length) chat.lastIds = harvested;
 
@@ -343,22 +356,27 @@
 
         const actions = Array.isArray(data.actions) ? data.actions : [];
         if (actions.length) {
+          // нормальный путь: сервер дал экшены
           const aPlay = actions.find(a => a.type === 'play' && (a.id || a.query));
           if (aPlay) {
             const id = getYouTubeId(aPlay.id || aPlay.query);
             if (id) chat.lastIds = [id];
           }
+          runActions(actions);
+        } else {
+          // ВАЖНО: нет actions — ДОЖИМАЕМ ЛОКАЛЬНО (не логируем второй «бот-ответ», только заметку)
+          const localReply = handleCommandLocal(v);
+          log("[" + localReply + "]", "note");
         }
-        runActions(actions.length ? actions : []);
 
-        if (data.explain) log("[" + data.explain + "]", "note");
+        if (isStr(data.explain)) log("[" + data.explain + "]", "note");
         return;
       }
     } catch (e) {
       console.warn("AI API error", e);
     }
 
-    // fallback
+    // 2) Фоллбэк (сервер молчит/ошибка/пусто)
     const reply = handleCommandLocal(v);
     log(reply, "bot");
     speak(reply);
