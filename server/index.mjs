@@ -1,11 +1,9 @@
-// server/index.mjs — v4.2.4 (2025-09-08)
-// Focus: rock-solid intent on Windows consoles / mixed Unicode forms.
-// - Aggressive normalization (NFC + combining fixes + punctuation unification).
-// - Robust calm/lofi/chill detection even with ĭ vs й, ё vs е, fancy hyphens.
-// - WantsPlay covers вруби/включи/поставь/сыграй/запусти (and latin "play").
-// - Last-chance picks play(query) for calm and mixradio for generic play.
-// - Final guard kept (never empty actions).
-// - DEBUG_INTENT=1 prints normalized text and which fallback path fired.
+// server/index.mjs — v4.3.1-merge (2025-09-08)
+// Объединение лучшего из v4.2.4 и короткого варианта:
+// + Сохранил: память по sid, агрессивную нормализацию, эвристики интентов,
+//   last-chance, YouTube enrichment, final guard, DEBUG-логи, health с version.
+// + Добавил/оставил: FEWSHOTS в валидном JSON, soft-repair JSON из ответа,
+//   строгий контракт JSON, аккуратный таймаут и обработку ошибок.
 
 import 'dotenv/config';
 import express from 'express';
@@ -14,13 +12,13 @@ import cookieParser from 'cookie-parser';
 
 const app = express();
 const PORT = Number(process.env.PORT || 8787);
-const VERSION = 'server-v4.2.4-2025-09-08';
+const VERSION = 'server-v4.3.1-merge-2025-09-08';
 const DEBUG_INTENT = String(process.env.DEBUG_INTENT || '') === '1';
 
 // === LLM / YT конфиг ===
 const OPENAI_BASE_URL = (process.env.OPENAI_BASE_URL || 'http://127.0.0.1:1234/v1').replace(/\/+$/,'');
-const OPENAI_API_KEY  = process.env.OPENAI_API_KEY || 'lm-studio';
-const OPENAI_MODEL    = process.env.OPENAI_MODEL   || 'qwen2.5-7b-instruct';
+const OPENAI_API_KEY  = process.env.OPENAI_API_KEY || process.env.LLM_API_KEY || 'lm-studio';
+const OPENAI_MODEL    = process.env.OPENAI_MODEL || process.env.LLM_MODEL || 'qwen2.5-7b-instruct';
 const YT_API_KEY      = process.env.YT_API_KEY     || ''; // опционально для автоподбора YouTube ID
 
 // --- middleware
@@ -86,26 +84,34 @@ const SYSTEM = `Ты — ассистент музыкальной витрин�
 - Если не уверен, верни actions:[] и короткий reply.
 `;
 
+// FEWSHOTS как валидные JSON-строки (минимум кавер-кейсов для парсера)
 const FEWSHOTS = [
-  { role: 'user', content: 'включи джаз' },
-  { role: 'assistant', content: JSON.stringify({ reply:'Включаю джаз.', actions:[{type:'recommend', genre:'джаз', autoplay:true}] }) },
-  { role: 'user', content: 'сделай паузу' },
-  { role: 'assistant', content: JSON.stringify({ reply:'Пауза.', actions:[{type:'player', action:'pause'}] }) },
-  { role: 'user', content: 'громче' },
-  { role: 'assistant', content: JSON.stringify({ reply:'Громче.', actions:[{type:'volume', delta:0.1}] }) },
+  { "role": "user", "content": "включи джаз" },
+  { "role": "assistant", "content": "{\"reply\":\"Включаю джаз.\",\"actions\":[{\"type\":\"recommend\",\"genre\":\"джаз\",\"autoplay\":true}]}" },
 
-  { role: 'user', content: 'включи queen' },
-  { role: 'assistant', content: JSON.stringify({ reply:'Включаю Queen.', actions:[{type:'recommend', like:'queen', autoplay:true}] }) },
-  { role: 'user', content: 'что-нибудь спокойное' },
-  { role: 'assistant', content: JSON.stringify({ reply:'Ставлю спокойное.', actions:[{type:'recommend', mood:'calm', autoplay:true}] }) },
-  { role: 'user', content: 'жанр рок 80-х' },
-  { role: 'assistant', content: JSON.stringify({ reply:'Рок 80-х.', actions:[{type:'recommend', genre:'рок', decade:'80s', autoplay:true}] }) },
-  { role: 'user', content: 'похожее на bohemian rhapsody' },
-  { role: 'assistant', content: JSON.stringify({ reply:'Похоже на Bohemian Rhapsody.', actions:[{type:'recommend', like:'bohemian rhapsody', autoplay:true}] }) },
-  { role: 'user', content: 'сверни плеер' },
-  { role: 'assistant', content: JSON.stringify({ reply:'Сворачиваю.', actions:[{type:'ui', action:'minimize'}] }) },
-  { role: 'user', content: 'разверни' },
-  { role: 'assistant', content: JSON.stringify({ reply:'Открываю плеер.', actions:[{type:'ui', action:'expand'}] }) },
+  { "role": "user", "content": "сделай паузу" },
+  { "role": "assistant", "content": "{\"reply\":\"Пауза.\",\"actions\":[{\"type\":\"player\",\"action\":\"pause\"}]}" },
+
+  { "role": "user", "content": "громче" },
+  { "role": "assistant", "content": "{\"reply\":\"Громче.\",\"actions\":[{\"type\":\"volume\",\"delta\":0.1}]}" },
+
+  { "role": "user", "content": "включи queen" },
+  { "role": "assistant", "content": "{\"reply\":\"Включаю Queen.\",\"actions\":[{\"type\":\"recommend\",\"like\":\"queen\",\"autoplay\":true}]}" },
+
+  { "role": "user", "content": "что-нибудь спокойное" },
+  { "role": "assistant", "content": "{\"reply\":\"Ставлю спокойное.\",\"actions\":[{\"type\":\"recommend\",\"mood\":\"calm\",\"autoplay\":true}]}" },
+
+  { "role": "user", "content": "жанр рок 80-х" },
+  { "role": "assistant", "content": "{\"reply\":\"Рок 80-х.\",\"actions\":[{\"type\":\"recommend\",\"genre\":\"рок\",\"decade\":\"80s\",\"autoplay\":true}]}" },
+
+  { "role": "user", "content": "похожее на bohemian rhapsody" },
+  { "role": "assistant", "content": "{\"reply\":\"Похожую музыку включаю.\",\"actions\":[{\"type\":\"recommend\",\"like\":\"bohemian rhapsody\",\"autoplay\":true}]}" },
+
+  { "role": "user", "content": "сверни плеер" },
+  { "role": "assistant", "content": "{\"reply\":\"Сворачиваю.\",\"actions\":[{\"type\":\"ui\",\"action\":\"minimize\"}]}" },
+
+  { "role": "user", "content": "разверни" },
+  { "role": "assistant", "content": "{\"reply\":\"Открываю плеер.\",\"actions\":[{\"type\":\"ui\",\"action\":\"expand\"}]}" }
 ];
 
 /* ---------------- Утилиты ---------------- */
@@ -120,8 +126,8 @@ function normalizeAggressive(s='') {
   // fix й composed as и + ◌̆ (U+0306)
   t = t.replace(/\u0438\u0306/g, '\u0439').replace(/\u0418\u0306/g, '\u0419');
   // remove any remaining combining marks
-  t = t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').normalize('NFC');
-  // map ё → е (so "спокойное" vs "спокоённое")
+  try { t = t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').normalize('NFC'); } catch {}
+  // map ё → е
   t = t.replace(/\u0451/g, '\u0435').replace(/\u0401/g, '\u0415');
   // lower
   t = t.toLowerCase();
@@ -151,12 +157,12 @@ async function askLLM(messages) {
     }
 
     const j = await r.json().catch(()=> ({}));
-    const content = j?.choices?.[0]?.message?.content ?? '';
-    const clipped = String(content).slice(0, 25000); // защита от длинных ответов
-    const maybeJson = extractJSONObject(clipped) || clipped;
+    const content  = j?.choices?.[0]?.message?.content ?? '';
+    const clipped  = String(content).slice(0, 25000); // защита от длинных ответов
+    const maybeJson= extractJSONObject(clipped) || clipped;
     const repaired = softRepair(maybeJson);
     if (repaired && typeof repaired === 'object') {
-      const reply = String(repaired.reply || '').slice(0,500);
+      const reply   = String(repaired.reply || '').slice(0,500);
       const explain = String(repaired.explain || '');
       const actions = Array.isArray(repaired.actions) ? repaired.actions : [];
       return { reply, explain, actions };
@@ -170,6 +176,7 @@ async function askLLM(messages) {
 }
 
 /* ---------------- Soft-repair JSON ---------------- */
+// Вырезаем наибольший JSON-объект из мусорного текста
 function extractJSONObject(s='') {
   if (!s) return null;
   let inStr = false, esc = false, depth = 0, start = -1;
@@ -184,17 +191,28 @@ function extractJSONObject(s='') {
   }
   return null;
 }
+
 function softRepair(text='') {
   if (!text || typeof text !== 'string') return null;
   let t = text.trim();
+
+  // убираем ```json ... ```
   t = t.replace(/^```(?:json)?/i, '').replace(/```$/,'');
+
+  // если уже JSON — отлично
   try { return JSON.parse(t); } catch {}
-  t = t
-    .replace(/([{,]\s*)'([^']+?)'(\s*:)/g, '$1"$2"$3')
-    .replace(/:\s*'([^']*?)'/g, ': "$1"')
+
+  // подчистим лишнее вокруг фигурных скобок
+  const braced = t.replace(/^.*?\{/, '{').replace(/\}.*?$/, '}');
+
+  // приводим одинарные кавычки к двойным для ключей/значений
+  let s = braced
+    .replace(/([{\[,]\s*)'([^']+?)'(\s*:)/g, '$1"$2"$3')
+    .replace(/:\s*'([^']*?)'(\s*[,}\]])/g, ':"$1"$2')
     .replace(/(\{|,)\s*actions\s*:/g, '$1 "actions":')
     .replace(/,\s*}/g, '}').replace(/,\s*]/g, ']');
-  try { return JSON.parse(t); } catch {}
+
+  try { return JSON.parse(s); } catch {}
   return null;
 }
 
@@ -335,7 +353,7 @@ app.post('/api/chat', async (req, res) => {
 
     // Скомбинируем историю и уберём дубли
     const srvHist = memory.get(sid) || [];
-    const combined = [...srvHist, ...clientHist.slice(-8)];
+    const combined = [...srvHist, ...clientHist.slice(-MAX_SRV_HISTORY)];
     const dedup = [];
     const seen = new Set();
     for (const m of combined) {
@@ -373,7 +391,7 @@ app.post('/api/chat', async (req, res) => {
       }
     }
 
-    // 4) enrichment:
+    // 4) enrichment: recommend+autoplay → play{ query } + (опционально) YouTube id
     let actions = Array.isArray(data.actions) ? data.actions : [];
     const out = [];
 
@@ -444,7 +462,7 @@ app.post('/api/chat', async (req, res) => {
     }
     actions = enriched;
 
-    // 5) FINAL GUARD: никогда не возвращаем actions:[]
+    // 5) FINAL GUARD: никогда не возвращаем actions: []
     if (!actions.length) {
       actions = [{ type:'mixradio' }];
       if (!data.reply) data.reply = 'Включаю микс-радио.';

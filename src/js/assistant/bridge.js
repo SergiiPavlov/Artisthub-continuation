@@ -1,5 +1,12 @@
 /* Bridge: превращаем события assistant:* в реальные действия плеера/интерфейса */
 (() => {
+  // Signal presence of assistant bridge to avoid duplicate wiring
+  try { window.__AH_BRIDGE_PRESENT = true; } catch {}
+  // If the dedicated player patch is installed, skip this bridge to avoid double-handling.
+  if (typeof window !== 'undefined' && window.__AM_PLAYER_PATCH_INSTALLED__) {
+    return;
+  }
+
   const q = (sel) => document.querySelector(sel);
 
   function safeCall(method, ...args) {
@@ -15,7 +22,7 @@
 
   function player() { return (window.AM && window.AM.player) || null; }
 
-  // Вид (лист/сетка)
+  // Вид (list/grid)
   document.addEventListener("assistant:view", (e) => {
     const mode = e?.detail?.mode;
     const isList = mode === "list";
@@ -51,22 +58,13 @@
     }
   });
 
-  // Транспорт: play/pause/next/prev/stop
+  // Транспорт
   document.addEventListener("assistant:player-play", () => {
     const p = player();
-    if (!p) {
+    if (!p || !safeCall(p.play)) {
       clickFirst(".am-player [data-action='play']",
                  ".am-player__btn--play",
                  "button[aria-label='Play']");
-      return;
-    }
-    if (p.isActive?.()) { safeCall(p.play); }
-    else if (p.hasQueue?.()) { safeCall(p.play); }
-    else if (typeof p.openQueue === "function") {
-      // если очереди нет — запустить MixRadio через событие
-      document.dispatchEvent(new CustomEvent("assistant:mixradio"));
-    } else {
-      safeCall(p.play);
     }
   });
 
@@ -83,7 +81,6 @@
     const p = player();
     if (!p || !safeCall(p.stop)) {
       clickFirst(".am-player [data-action='stop']",
-                 ".am-player__btn--stop",
                  "button[aria-label='Stop']");
     }
   });
@@ -117,10 +114,8 @@
       return;
     }
 
-    // Фоллбэк — ползунок громкости в DOM
-    const slider = q(".am-player input[type='range'].am-player__volume") ||
-                   q(".am-player input[type='range'][name='volume']") ||
-                   q(".am-player input[type='range']");
+    // Фоллбэк по слайдеру громкости в DOM
+    const slider = document.querySelector(".am-player input[type='range'][name='volume'], .am-player .volume input[type='range']");
     if (slider) {
       const cur = Number(slider.value || 70) / 100;
       const next = Math.max(0, Math.min(1, cur + delta));

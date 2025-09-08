@@ -53,7 +53,9 @@
   cursor: pointer;
   z-index: var(--as-z);
   box-shadow: var(--as-shadow);
-  transition: transform 0.15s ease, opacity 0.15s ease;
+  transition:
+    transform 0.15s ease,
+    opacity 0.15s ease;
 }
 .assistant__toggle:hover {
   transform: translateY(-1px);

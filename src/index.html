@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
@@ -16,12 +16,7 @@
       rel="stylesheet"
     />
 
-    <link
-      href="https://fonts.googleapis.com/css2?family=Cabin:wght@400&family=Roboto:wght@400&family=Sarabun:wght@400;500;600;700&display=swap"
-      rel="stylesheet"
-    />
-
-    <!-- normalizer -->
+    <!-- normalize -->
     <link
       rel="stylesheet"
       href="https://cdnjs.cloudflare.com/ajax/libs/normalize/8.0.1/normalize.min.css"
@@ -32,7 +27,6 @@
   <body>
     <load src="./partials/header.html" icon-path="img/sprite.svg#logo" />
 
-    <!-- Main Content import -->
     <main>
       <load src="./partials/hero.html" />
       <load src="./partials/artists.html" />
@@ -49,8 +43,8 @@
     <!-- UI панели (создаёт кнопку 🤖 и окно) -->
     <script type="module" src="./js/assistant/chat.js"></script>
 
-    <!-- мост: слушает события ассистента и дёргает твои кнопки/плеер -->
-    <script type="module" src="./js/assistant/bridge.js"></script>
+    <!-- ВАЖНО: убрали bridge.js, чтобы не было двойных слушателей assistant:* -->
+    <!-- <script type="module" src="./js/assistant/bridge.js"></script> -->
 
     <!-- твой основной код сайта -->
     <script type="module" src="./main.js"></script>
