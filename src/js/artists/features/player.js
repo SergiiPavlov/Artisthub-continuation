@@ -2,14 +2,18 @@
 /* global YT */
 
 /**
- * Mini YouTube player (superset, v2.3.1)
- * — сохраняет ВСЁ из твоей версии (UI, bubble, drag-n-dock, прогресс, mute, volume)
- * — добавляет: server-search → стабильная очередь ID (без «зацикливания первой»)
- * — playSearch: сперва /api/yt/search (если доступно), затем фоллбэк на YT search playlist
- * — open: мягкий фоллбэк — если пришёл невалидный ID/URL, трактуем как поисковый запрос
- * — добавляет «sleep after current»: флаг window.__AM_SLEEP_AFTER__ останавливает плеер после текущего трека
- * — не ломает публичное API: openQueue, play, pause, stop, next, prev, setVolume/getVolume, minimize/expand
- * — эмитит совместимые события AM.player.* (ready/state/error/minimized/expanded/track)
+ * Mini YouTube player (superset, v2.3.2)
+ *
+ * Основа: v2.3.1 (server-search + мягкий open + sleep-after-current)
+ * Добавлено: searchMode для фоллбэка на YT search playlist — исключает «зацикливание первой».
+ *
+ * Ключевое:
+ * - Сначала пробуем серверный /api/yt/search → стабильная очередь ID.
+ * - Если серверного поиска нет/пусто — включаем searchMode и используем встроенную ленту YouTube:
+ *   * НЕ гидратируем локальную queue из yt.getPlaylist();
+ *   * next/prev/autoNext используют yt.nextVideo()/previousVideo() (без пересоздания iframe);
+ *   * при любом явном open/openQueue/playByIndex — searchMode выключается.
+ * - Сохранены публичное API и события AM.player.* (ready/state/error/minimized/expanded/track).
  */
 
 let _instance = null;
@@ -155,6 +159,9 @@ export function createMiniPlayer() {
   let queue = [];
   let qi = -1;
   let loop = false;
+
+  // NEW: searchMode — активен при фоллбэке на YT search playlist
+  let searchMode = false;
 
   const DOCK_KEY = "amPlayerPos";
   let dockDrag = null;
@@ -328,6 +335,8 @@ export function createMiniPlayer() {
 
   /* ---------- helpers around YT playlist ---------- */
   function hydrateFromYTPlaylist() {
+    // В searchMode не трогаем локальную очередь — пусть рулит сама лента YT
+    if (searchMode) return;
     if (!yt || typeof yt.getPlaylist !== "function") return;
     try {
       const pl = yt.getPlaylist() || [];
@@ -425,6 +434,9 @@ export function createMiniPlayer() {
   /* ---------- Очередь ---------- */
   async function playByIndex(idx, opts = {}) {
     if (!queue.length) return;
+    // Любой явный переход по индексам — это локальная очередь → выключаем searchMode
+    searchMode = false;
+
     qi = clamp(idx, 0, queue.length - 1);
     const id = queue[qi];
     if (!id || !/^[\w-]{11}$/.test(id)) {
@@ -446,11 +458,12 @@ export function createMiniPlayer() {
   }
 
   function autoNext() {
-    if (queue.length) {
+    if (queue.length && !searchMode) {
       if (qi < queue.length - 1) playByIndex(qi + 1, { reveal: false });
       else if (loop) playByIndex(0, { reveal: false });
       else if (yt && yt.nextVideo) yt.nextVideo();
     } else if (yt && yt.nextVideo) {
+      // В searchMode всегда доверяем встроенному плейлисту Youtube
       yt.nextVideo();
     }
   }
@@ -538,6 +551,7 @@ export function createMiniPlayer() {
     yt = null; ready = false; duration = 0; clearTimer(); clearWatchdog(); clearSearchWatch();
     uiShow(false); uiMin(false);
     queue = []; qi = -1;
+    searchMode = false;
     setBubblePulse(false);
   });
   btnHide.addEventListener("click", () => { uiMin(true); });
@@ -547,6 +561,7 @@ export function createMiniPlayer() {
     yt = null; ready = false; duration = 0; clearTimer(); clearWatchdog(); clearSearchWatch();
     uiShow(false); uiMin(false);
     queue = []; qi = -1;
+    searchMode = false;
     setBubblePulse(false);
   });
 
@@ -557,11 +572,11 @@ export function createMiniPlayer() {
     else { yt.playVideo?.(); uiPlayIcon(true); setBubblePulse(true); }
   });
   btnPrev.addEventListener("click", () => {
-    if (queue.length) { playByIndex(qi > 0 ? qi - 1 : (loop ? queue.length - 1 : 0), { reveal: true }); }
+    if (queue.length && !searchMode) { playByIndex(qi > 0 ? qi - 1 : (loop ? queue.length - 1 : 0), { reveal: true }); }
     else { yt?.previousVideo?.(); }
   });
   btnNext.addEventListener("click", () => {
-    if (queue.length) { playByIndex(qi < queue.length - 1 ? qi + 1 : (loop ? 0 : qi), { reveal: true }); }
+    if (queue.length && !searchMode) { playByIndex(qi < queue.length - 1 ? qi + 1 : (loop ? 0 : qi), { reveal: true }); }
     else { yt?.nextVideo?.(); }
   });
 
@@ -602,6 +617,7 @@ export function createMiniPlayer() {
       if (q) return playSearch(q);
       return;
     }
+    searchMode = false;
     queue = [id]; qi = 0;
     uiMin(false); uiShow(true); restoreDockPos();
     await playByIndex(0, { reveal: true });
@@ -610,6 +626,7 @@ export function createMiniPlayer() {
   async function openQueue(list, opts = {}) {
     const ids = (list || []).map(getYouTubeId).filter(Boolean);
     if (!ids.length) return;
+    searchMode = false;
     loop = !!opts.loop;
     const arr = opts.shuffle ? shuffleArr(ids) : ids.slice();
     queue = arr;
@@ -619,7 +636,7 @@ export function createMiniPlayer() {
   }
 
   function next() {
-    if (queue.length) {
+    if (queue.length && !searchMode) {
       const reveal = !dock.classList.contains("am-player--min");
       playByIndex(qi < queue.length - 1 ? qi + 1 : (loop ? 0 : qi), { reveal });
     } else {
@@ -627,7 +644,7 @@ export function createMiniPlayer() {
     }
   }
   function prev() {
-    if (queue.length) {
+    if (queue.length && !searchMode) {
       const reveal = !dock.classList.contains("am-player--min");
       playByIndex(qi > 0 ? qi - 1 : (loop ? queue.length - 1 : 0), { reveal });
     } else {
@@ -637,7 +654,7 @@ export function createMiniPlayer() {
 
   function play() {
     if (yt && ready) { yt.playVideo?.(); uiPlayIcon(true); setBubblePulse(true); return; }
-    if (queue.length) { playByIndex(qi < 0 ? 0 : qi, { reveal: false }); return; }
+    if (queue.length && !searchMode) { playByIndex(qi < 0 ? 0 : qi, { reveal: false }); return; }
   }
   function pause() {
     try { yt?.pauseVideo?.(); } catch {}
@@ -679,21 +696,21 @@ export function createMiniPlayer() {
       return;
     }
 
-    // 2) Фоллбэк — YT search playlist (как было)
+    // 2) Фоллбэк — YT search playlist + searchMode
+    searchMode = true;
+    queue = []; qi = -1; // локальную очередь не используем
     await ensureYT(null);
     try {
       yt.loadPlaylist({ listType: "search", list: q, index: 0 });
       yt.playVideo?.();
       clearSearchWatch();
-      // hydrateFromYTPlaylist подтянет очередь дальше
       searchWatchdogId = setTimeout(() => {
-        hydrateFromYTPlaylist();
+        // НЕ гидратируем queue в searchMode — оставляем YouTube рулить лентой
         try {
           const st = yt.getPlayerState?.();
           if (st !== YT.PlayerState.PLAYING) yt.playVideo?.();
         } catch {}
       }, 1000);
-      queue = []; qi = -1; // очередь гидратится позже из yt.getPlaylist()
       aYTlink.href = "#";
       uiPlayIcon(true);
       setBubblePulse(true);

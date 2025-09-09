@@ -1,12 +1,9 @@
-// server/index.mjs — v4.2.4 (+ /api/yt/search, 2025-09-09)
-// Focus: rock-solid intent on Windows consoles / mixed Unicode forms.
-// - Aggressive normalization (NFC + combining fixes + punctuation unification).
-// - Robust calm/lofi/chill detection even with ĭ vs й, ё vs е, fancy hyphens.
-// - WantsPlay covers вруби/включи/поставь/сыграй/запусти (and latin "play").
-// - Last-chance picks play(query) for calm and mixradio for generic play.
-// - Final guard kept (never empty actions).
-// - DEBUG_INTENT=1 prints normalized text and which fallback path fired.
-// - NEW: /api/yt/search endpoint returning stable list of YouTube IDs for client queues.
+// server/index.mjs — server-v4.2.5-2025-09-09
+// Focus: стабильный интент + фиксация "зацикливания одного ролика".
+// Изменения:
+//  - Не конвертируем плейлистовые запросы (артист/жанр/муд) в один ID.
+//  - В ID переводим только явно "одиночные" треки (artist - song, "…", official audio/video).
+//  - Оставлен /api/yt/search (опционально).
 
 import 'dotenv/config';
 import express from 'express';
@@ -15,14 +12,14 @@ import cookieParser from 'cookie-parser';
 
 const app = express();
 const PORT = Number(process.env.PORT || 8787);
-const VERSION = 'server-v4.2.4-ytsearch-2025-09-09';
+const VERSION = 'server-v4.2.5-2025-09-09';
 const DEBUG_INTENT = String(process.env.DEBUG_INTENT || '') === '1';
 
 // === LLM / YT конфиг ===
 const OPENAI_BASE_URL = (process.env.OPENAI_BASE_URL || 'http://127.0.0.1:1234/v1').replace(/\/+$/,'');
 const OPENAI_API_KEY  = process.env.OPENAI_API_KEY || 'lm-studio';
 const OPENAI_MODEL    = process.env.OPENAI_MODEL   || 'qwen2.5-7b-instruct';
-const YT_API_KEY      = process.env.YT_API_KEY     || ''; // опционально для автоподбора YouTube ID и /api/yt/search
+const YT_API_KEY      = process.env.YT_API_KEY     || ''; // опционально
 
 // --- middleware
 app.use(cors({ origin: true, credentials: true }));
@@ -116,17 +113,11 @@ function capitalize(s='') {
 function normalizeAggressive(s='') {
   let t = String(s || '');
   try { t = t.normalize('NFC'); } catch {}
-  // unify punctuation/hyphens
   t = t.replace(/[\u2010-\u2015\u2212]/g, '-').replace(/[“”«»„‟]/g, '"').replace(/[’‘‛]/g, "'");
-  // fix й composed as и + ◌̆ (U+0306)
   t = t.replace(/\u0438\u0306/g, '\u0439').replace(/\u0418\u0306/g, '\u0419');
-  // remove any remaining combining marks
   t = t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').normalize('NFC');
-  // map ё → е
   t = t.replace(/\u0451/g, '\u0435').replace(/\u0401/g, '\u0415');
-  // lower
-  t = t.toLowerCase();
-  return t;
+  return t.toLowerCase();
 }
 
 /* ---------------- Вызов LLM ---------------- */
@@ -153,7 +144,7 @@ async function askLLM(messages) {
 
     const j = await r.json().catch(()=> ({}));
     const content = j?.choices?.[0]?.message?.content ?? '';
-    const clipped = String(content).slice(0, 25000); // защита от длинных ответов
+    const clipped = String(content).slice(0, 25000);
     const maybeJson = extractJSONObject(clipped) || clipped;
     const repaired = softRepair(maybeJson);
     if (repaired && typeof repaired === 'object') {
@@ -222,11 +213,11 @@ function inferActionsFromUser(text='') {
 
   const wantsPlay = /(включ|вруби|постав|поставь|запусти|play|сыграй)/.test(t);
 
-  // Настроение: calm (спокой, lofi, chill, relax, ambient)
+  // Настроение
   const isCalm = /(спок|спокои|calm|lofi|lo-fi|chill|relax|ambient)/.test(t);
   if (isCalm) actions.push({ type:'recommend', mood:'calm', autoplay: wantsPlay });
 
-  // Жанры (синонимы)
+  // Жанры
   const gsyn = [
     ['рок','рок|rock|альтернативн|альт|гранж|панк|metal|метал|hard rock|classic rock'],
     ['поп','поп|pop|dance pop|euro pop|эстрад'],
@@ -252,15 +243,15 @@ function inferActionsFromUser(text='') {
     if (re.test(t)) { actions.push({ type:'recommend', genre: canon, autoplay: wantsPlay }); break; }
   }
 
-  // Десятилетия (80s, 80-е, 2010-е)
+  // Десятилетия
   const d = t.match(/\b(50|60|70|80|90|2000|2010)(?:-?е|s|х)?\b/);
   if (d) {
     const s = d[1];
-    const decade = /^\d{2}$/.test(s) ? `${s}s` : `${s}s`; // 80 -> 80s; 2010 -> 2010s
+    const decade = /^\d{2}$/.test(s) ? `${s}s` : `${s}s`;
     actions.push({ type:'recommend', decade, autoplay: wantsPlay });
   }
 
-  // Похожее на / включи ...
+  // Похожее/включи ...
   const like1 = t.match(/(?:похож(ее|е)\s+на|как у|из\s+)(.+)$/i);
   const like2 = t.match(/(?:включи|вруби|поставь|постав|запусти|найди)\s+(.+)/i);
   const like = (like1 && like1[2]) || (like2 && like2[1]);
@@ -306,7 +297,7 @@ function replyForActions(actions=[]) {
   return 'Готово.';
 }
 
-/* ---------------- YouTube helper (single best) ---------------- */
+/* ---------------- YouTube helpers ---------------- */
 async function ytSearchFirst(q='') {
   if (!YT_API_KEY || !q) return '';
   const u = new URL('https://www.googleapis.com/youtube/v3/search');
@@ -325,9 +316,19 @@ async function ytSearchFirst(q='') {
   return (id && /^[\w-]{11}$/.test(id)) ? id : '';
 }
 
-/* ---------------- NEW: YouTube Search API (server-side queue) ---------------- */
-// POST /api/yt/search  body: { q: string, max?: number }
-// Возвращает {ids:[...], q, took} — стабильный список YouTube ID.
+// Явный «одиночный трек»?
+function shouldResolveToId(query='') {
+  const q = normalizeAggressive(query);
+  if (q.includes(' - ')) return true; // artist - song
+  if (/\b(official|audio|video|lyrics|remaster(ed)?)\b/.test(q)) return true;
+  if (/["«»“”„‟].+["«»“”„‟]/.test(query)) return true; // кавычки вокруг названия
+  if (/\b\d{4}\b/.test(q)) return true; // часто уточняют год конкретного трека
+  // короткая "queen" / "madonna" → НЕ резолвим в ID (это плейлист)
+  if (q.split(/\s+/).length <= 2) return false;
+  return false;
+}
+
+/* ---------------- (опц.) /api/yt/search для очередей ---------------- */
 app.post('/api/yt/search', async (req, res) => {
   try {
     const q = String(req.body?.q || '').trim();
@@ -335,27 +336,24 @@ app.post('/api/yt/search', async (req, res) => {
     if (!q) return res.status(400).json({ ids: [], error: 'no query' });
     if (!YT_API_KEY) return res.json({ ids: [], error: 'no YT_API_KEY' });
 
-    const t0 = Date.now();
     const ids = await ytSearchMany(q, max);
-    return res.json({ ids, q, took: Date.now() - t0 });
+    return res.json({ ids, q, took: Date.now() - req.startTime });
   } catch (e) {
     console.error('[yt.search] error', e);
     return res.status(500).json({ ids: [], error: 'server_error' });
   }
 });
 
-// Собираем до max релевантных ID, до нескольких страниц + лёгкая подсказка "official"
 async function ytSearchMany(q, max = 25) {
+  if (!YT_API_KEY) return [];
   const out = [];
   let pageToken = '';
-  let tries = 0;
-
   const queries = [q, `${q} official`];
 
   for (const query of queries) {
     pageToken = '';
-    tries = 0;
-    while (out.length < max && tries < 4) { // до 4 страниц на запрос
+    let tries = 0;
+    while (out.length < max && tries < 4) {
       tries++;
       const url = new URL('https://www.googleapis.com/youtube/v3/search');
       url.searchParams.set('part', 'id');
@@ -371,20 +369,16 @@ async function ytSearchMany(q, max = 25) {
       if (!r || !r.ok) break;
       const j = await r.json().catch(() => ({}));
       const items = Array.isArray(j.items) ? j.items : [];
-
       for (const it of items) {
         const id = it?.id?.videoId;
-        if (id && /^[A-Za-z0-9_-]{11}$/.test(id)) {
-          out.push(id);
-          if (out.length >= max) break;
-        }
+        if (id && /^[A-Za-z0-9_-]{11}$/.test(id)) out.push(id);
+        if (out.length >= max) break;
       }
       if (!j.nextPageToken) break;
       pageToken = j.nextPageToken;
     }
     if (out.length >= Math.max(3, Math.floor(max / 2))) break;
   }
-
   return out.slice(0, max);
 }
 
@@ -397,7 +391,6 @@ app.post('/api/chat', async (req, res) => {
     const clientHist = Array.isArray(req.body?.history) ? req.body.history : [];
     if (!userText) return res.json({ reply: 'Скажи, что включить.', actions: [] });
 
-    // Скомбинируем историю и уберём дубли
     const srvHist = memory.get(sid) || [];
     const combined = [...srvHist, ...clientHist.slice(-8)];
     const dedup = [];
@@ -418,7 +411,7 @@ app.post('/api/chat', async (req, res) => {
     // 1) ответ модели
     let data = await askLLM(messages);
 
-    // 2) если пусто — эвристика
+    // 2) эвристика
     if (!Array.isArray(data.actions) || data.actions.length === 0) {
       const inferred = inferActionsFromUser(userText);
       if (inferred.length) {
@@ -428,7 +421,7 @@ app.post('/api/chat', async (req, res) => {
       }
     }
 
-    // 3) last-chance fallback
+    // 3) last-chance
     if (!Array.isArray(data.actions) || data.actions.length === 0) {
       const last = lastChanceActions(userText);
       if (last.length) {
@@ -437,7 +430,7 @@ app.post('/api/chat', async (req, res) => {
       }
     }
 
-    // 4) enrichment:
+    // 4) enrichment
     let actions = Array.isArray(data.actions) ? data.actions : [];
     const out = [];
 
@@ -454,7 +447,7 @@ app.post('/api/chat', async (req, res) => {
     const ensureLikeQuery = (like) => {
       const s = (like||'').trim();
       if (!s) return '';
-      return `${s} official audio`;
+      return s; // дальше решим: плейлист артиста или одиночный трек
     };
     const ensureGenreQuery = (genre) => {
       const g = normalizeAggressive(genre);
@@ -483,7 +476,8 @@ app.post('/api/chat', async (req, res) => {
 
     for (const a of actions) {
       if (a?.type === 'recommend' && a.like && a.autoplay) {
-        out.push({ type:'play', id:a.id||'', query: ensureLikeQuery(a.like) || a.like });
+        const like = ensureLikeQuery(a.like);
+        out.push({ type:'play', id:'', query: like });
         continue;
       }
       if (a?.type === 'recommend' && a.mood && a.autoplay) {
@@ -500,15 +494,21 @@ app.post('/api/chat', async (req, res) => {
     const enriched = [];
     for (const a of out) {
       if (a?.type === 'play' && !a.id && a.query && YT_API_KEY) {
-        const id = await ytSearchFirst(a.query);
-        enriched.push(id ? { ...a, id } : a);
+        // Только для явных "одиночных треков" пытаемся получить ID
+        if (shouldResolveToId(a.query)) {
+          const q = /official|audio|video|lyrics/i.test(a.query) ? a.query : `${a.query} official audio`;
+          const id = await ytSearchFirst(q);
+          enriched.push(id ? { ...a, id } : a);
+        } else {
+          enriched.push(a);
+        }
       } else {
         enriched.push(a);
       }
     }
     actions = enriched;
 
-    // 5) FINAL GUARD: никогда не возвращаем actions:[]
+    // 5) FINAL GUARD
     if (!actions.length) {
       actions = [{ type:'mixradio' }];
       if (!data.reply) data.reply = 'Включаю микс-радио.';

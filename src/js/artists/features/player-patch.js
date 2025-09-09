@@ -1,32 +1,30 @@
-// Bridges assistant:* события ↔ публичное API плеера
-// НИЧЕГО не импортим из player.js — работаем с переданным инстансом
+/*
+  player-patch.js — patch-v1.4.0-2025-09-09
+  Мост assistant:* ↔ публичное API плеера.
+  Важно: не ломаем контракт событий и Player API.
+*/
 
 export default function mountPlayerPatch(player) {
+  try { window.__AM_PLAYER_PATCH_INSTALLED__ = true; } catch {}
+
   if (!player || typeof player !== "object") {
     console.warn("[player-patch] No player instance provided");
     return;
   }
-  // 🔒 не даём повесить обработчики дважды
-  if (player.__amPatchInited) return;
-  player.__amPatchInited = true;
-
-  try { window.__AM_PLAYER_PATCH_INSTALLED__ = true; } catch {}
 
   const clamp01 = (x) => Math.max(0, Math.min(1, Number(x) || 0));
 
-  // Локальный парсер YouTube ID/URL
+  // Разбор ID/URL
   function toVideoId(urlOrId) {
     const s = String(urlOrId || "").trim();
     if (!s) return "";
     if (/^[A-Za-z0-9_-]{11}$/.test(s)) return s;
     try {
       const u = new URL(s, location.href);
-      // youtu.be/<id>
       if (/(^|\.)youtu\.be$/i.test(u.hostname)) {
-        const cand = u.pathname.replace(/^\/+/, "").slice(0, 32);
+        const cand = u.pathname.replace(/^\/+/, "");
         return /^[A-Za-z0-9_-]{11}$/.test(cand) ? cand : "";
       }
-      // youtube.com/watch?v=<id> | /embed/<id> | /v/<id> | /shorts/<id>
       const v = u.searchParams.get("v");
       if (v && /^[A-Za-z0-9_-]{11}$/.test(v)) return v;
       const m = u.pathname.match(/\/(?:embed|v|shorts)\/([^/?#]+)/i);
@@ -35,7 +33,6 @@ export default function mountPlayerPatch(player) {
     return "";
   }
 
-  // Набор сидов на случай mixradio
   const MIX_SEEDS = [
     "random music mix",
     "popular hits playlist",
@@ -47,7 +44,6 @@ export default function mountPlayerPatch(player) {
     "ambient focus music long"
   ];
 
-  // Вызывать метод плеера безопасно
   const call = (name, ...args) => {
     const fn = player?.[name];
     if (typeof fn === "function") {
@@ -56,7 +52,7 @@ export default function mountPlayerPatch(player) {
     }
   };
 
-  // Маленький антидублер: одинаковый эвент с тем же payload в течение 350мс — игнорим
+  // Антидубль
   const recently = new Map();
   function dedup(key, ttl = 350) {
     const now = Date.now();
@@ -66,7 +62,7 @@ export default function mountPlayerPatch(player) {
     return false;
   }
 
-  // === PLAY (id или поисковый запрос) ===
+  // === PLAY ===
   window.addEventListener("assistant:play", (e) => {
     const rawId  = e?.detail?.id ?? "";
     const query  = e?.detail?.query ?? "";
@@ -75,19 +71,16 @@ export default function mountPlayerPatch(player) {
 
     const vid = toVideoId(rawId);
     if (vid) {
-      // Только если ID действительно валиден (11-символов)
       call("open", vid);
     } else if (query && player.playSearch) {
       call("playSearch", String(query));
     } else if (rawId) {
-      // id выглядит как мусор — трактуем как поисковый запрос
       call("playSearch", String(rawId));
     }
   });
 
   // === MIXRADIO ===
   window.addEventListener("assistant:mixradio", () => {
-    // Если на странице есть кнопка MixRadio, отдаём управление ей (artists/index.js)
     if (document.querySelector("#random-radio")) return;
     const seed = MIX_SEEDS[(Math.random() * MIX_SEEDS.length) | 0];
     if (player.playSearch) call("playSearch", seed);
@@ -104,7 +97,7 @@ export default function mountPlayerPatch(player) {
   window.addEventListener("assistant:minimize", () => call("minimize"));
   window.addEventListener("assistant:expand",   () => call("expand"));
 
-  // === ГРОМКОСТЬ (delta в долях [-1..1]) ===
+  // === ГРОМКОСТЬ ===
   window.addEventListener("assistant:volume", (e) => {
     const d = Number(e?.detail?.delta || 0);
     if (!Number.isFinite(d)) return;
@@ -114,14 +107,25 @@ export default function mountPlayerPatch(player) {
     }
   });
 
-  // === RECOMMEND (жанр/настроение/похожесть) c autoplay ===
+  // === RECOMMEND (autoplay) ===
   window.addEventListener("assistant:recommend", (e) => {
     const a = e?.detail || {};
     if (!a || a.autoplay !== true) return;
 
+    const looksLikeTrack = (s) => {
+      const t = String(s || "").toLowerCase();
+      return /["«»“”„‟]/.test(s) || t.includes(' - ') || /(official|audio|video|lyrics|remaster)/.test(t);
+    };
+
     let q = "";
     if (a.like) {
-      q = `${a.like} official audio`;
+      const like = String(a.like).trim();
+      if (!like) return;
+      // если похоже на конкретный трек → одиночный трек
+      // иначе — хиты артиста (плейлист)
+      q = looksLikeTrack(like)
+        ? `${like} official audio`
+        : `${like} greatest hits playlist`;
     } else if (a.genre) {
       const map = new Map([
         ["джаз", "best jazz music relaxing"],
@@ -157,8 +161,7 @@ export default function mountPlayerPatch(player) {
     if (q && player.playSearch) call("playSearch", q);
   });
 
-  // Совместимость: ретрансляция document→window включается
-  // ТОЛЬКО если нет отдельного bridge (window.__AH_BRIDGE_PRESENT !== true)
+  // Совместимость doc→win, если нет внешнего bridge
   if (!(typeof window !== 'undefined' && window.__AH_BRIDGE_PRESENT === true)) {
     document.addEventListener("assistant:play",       (e) => window.dispatchEvent(new CustomEvent("assistant:play",       { detail: e.detail })));
     document.addEventListener("assistant:mixradio",   (e) => window.dispatchEvent(new CustomEvent("assistant:mixradio",   { detail: e.detail })));
@@ -173,3 +176,4 @@ export default function mountPlayerPatch(player) {
     document.addEventListener("assistant:recommend",  (e) => window.dispatchEvent(new CustomEvent("assistant:recommend",  { detail: e.detail })));
   }
 }
+

@@ -1,4 +1,5 @@
 // Chat Friend + AI bridge with memory + Provider + Optional server TTS (Piper)
+// VERSION: chat.js v2.3.0 (timer-suppress + UI actions) — 2025-09-09
 (() => {
   if (window.__ASSISTANT_UI_INIT__) return;
   window.__ASSISTANT_UI_INIT__ = true;
@@ -214,7 +215,7 @@
   btnTest?.addEventListener("click", () => speak("Привет! Я твой голосовой друг."));
   btnClr?.addEventListener("click", () => { logEl.innerHTML = ""; chat.history = []; });
 
-  // --- Sleep timer ---
+  // === Sleep timer (helpers) ===
   let sleepTimerId = null;
   function clearSleepTimer() {
     if (sleepTimerId) { clearTimeout(sleepTimerId); sleepTimerId = null; }
@@ -249,6 +250,25 @@
     else if (/^мин|m|min/.test(unit)) ms = n * 60 * 1000;
     else ms = n * 1000;
     return ms > 0 ? ms : null;
+  }
+  // Доп. парсер для «подавления мгновенного stop» от ИИ
+  function parseDelaySpec(text = "") {
+    const s = String(text).toLowerCase();
+    if (/(после\s+(этой|текущей)\s+(песни|композиции|трека)|after\s+(this|current)\s+(song|track))/.test(s)) {
+      return { afterCurrent: true };
+    }
+    // «через 15 сек/мин/час» без обязательного слова «выключись»
+    const m = s.match(/через\s+(\d{1,3})\s*(сек(?:унд[уы])?|с|sec|seconds|мин(?:ут[ы|у])?|m|min|minutes|час(?:ов|а)?|h|hour|hours)\b/);
+    if (m) {
+      const n = Number(m[1] || 0);
+      const unit = m[2] || "";
+      let ms = 0;
+      if (/^час|h|hour/.test(unit)) ms = n * 3600000;
+      else if (/^мин|m|min/.test(unit)) ms = n * 60000;
+      else ms = n * 1000;
+      if (ms > 0) return { ms };
+    }
+    return null;
   }
 
   // «после текущей песни выключись»
@@ -299,6 +319,9 @@
         dispatch("volume", a);
       } else if (a?.type === "mixradio") {
         dispatch("mixradio", { start: true });
+      } else if (a?.type === "ui" && a.action) {
+        if (a.action === "minimize") dispatch("minimize");
+        else if (a.action === "expand") dispatch("expand");
       } else if (a?.type === "play" && (a.id || a.query)) {
         dispatch("play", { id: a.id, query: a.query });
         const id = getYouTubeId(a.id || a.query);
@@ -335,9 +358,7 @@
       sleepAfterTrack = true;
       addMsg("bot", "Ок, выключу после текущего трека.");
       speak("Выключу после текущего трека");
-      // Доп. страховка: отменим любой отложенный таймер
       clearSleepTimer();
-      // Сообщим плееру через глобальный флаг (используется внутри player.js на ENDED)
       try { window.__AM_SLEEP_AFTER__ = true; } catch {}
       return true;
     }
@@ -367,9 +388,7 @@
         const q = `${artist} greatest hits playlist`;
         addMsg("bot", `Ок, хиты ${artist} — поехали. Выключу через ${Math.round(ms/60000)} мин.`);
         speak(`Включаю хиты ${artist}. Выключу через ${Math.round(ms/60000)} минут`);
-        // запускаем поток
         dispatch("play", { query: q });
-        // и ставим таймер
         scheduleSleep(ms);
         return true;
       }
@@ -399,6 +418,11 @@
     // Расширенные локальные намерения (таймеры/хиты) — до сервера
     if (tryAdvancedLocalIntents(v)) return;
 
+    // Подсказка: если пользователь сказал «через ...» или «после текущей песни»,
+    // а ИИ вернет мгновенный stop — мы его подавим и поставим локальный таймер.
+    const delaySpec = parseDelaySpec(v);
+    const suppressImmediateStop = !!(delaySpec && (delaySpec.ms || delaySpec.afterCurrent));
+
     // 1) Пытаемся через сервер ИИ
     try {
       const data = await callAI(v);
@@ -409,17 +433,39 @@
         addMsg("bot", data.reply);
         speak(data.reply);
 
-        const actions = Array.isArray(data.actions) ? data.actions : [];
+        let actions = Array.isArray(data.actions) ? data.actions : [];
         if (actions.length) {
+          // подавим немедленный stop, если просили задержку
+          if (suppressImmediateStop) {
+            actions = actions.filter(a => !(a?.type === 'player' && a.action === 'stop'));
+          }
           const aPlay = actions.find(a => a.type === 'play' && (a.id || a.query));
           if (aPlay) {
             const id = getYouTubeId(aPlay.id || aPlay.query);
             if (id) chat.lastIds = [id];
           }
           runActions(actions);
+
+          // после выполнения — если была задержка, ставим таймер/флаг
+          if (delaySpec?.ms) {
+            addMsg("note", `⏰ Выключусь через ~${Math.round(delaySpec.ms/1000)} сек.`);
+            scheduleSleep(delaySpec.ms);
+          } else if (delaySpec?.afterCurrent) {
+            sleepAfterTrack = true;
+            clearSleepTimer();
+            addMsg("note", "⏰ Выключусь после текущего трека.");
+            try { window.__AM_SLEEP_AFTER__ = true; } catch {}
+          }
         } else {
           const localReply = handleCommandLocal(v);
           addMsg("note", "[" + localReply + "]");
+          if (delaySpec?.ms) scheduleSleep(delaySpec.ms);
+          else if (delaySpec?.afterCurrent) {
+            sleepAfterTrack = true;
+            clearSleepTimer();
+            addMsg("note", "⏰ Выключусь после текущего трека.");
+            try { window.__AM_SLEEP_AFTER__ = true; } catch {}
+          }
         }
 
         if (isStr(data.explain)) addMsg("note", "[" + data.explain + "]");
@@ -523,3 +569,4 @@
     if (e.key === "Enter") { const t = inputEl.value; inputEl.value = ""; handleUserText(t); }
   });
 })();
+
