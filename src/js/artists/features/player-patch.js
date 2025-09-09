@@ -2,13 +2,15 @@
 // НИЧЕГО не импортим из player.js — работаем с переданным инстансом
 
 export default function mountPlayerPatch(player) {
-  // Помечаем, что патч установлен (чтобы другие мосты не дублировались)
-  try { window.__AM_PLAYER_PATCH_INSTALLED__ = true; } catch {}
-
   if (!player || typeof player !== "object") {
     console.warn("[player-patch] No player instance provided");
     return;
   }
+  // 🔒 не даём повесить обработчики дважды
+  if (player.__amPatchInited) return;
+  player.__amPatchInited = true;
+
+  try { window.__AM_PLAYER_PATCH_INSTALLED__ = true; } catch {}
 
   const clamp01 = (x) => Math.max(0, Math.min(1, Number(x) || 0));
 

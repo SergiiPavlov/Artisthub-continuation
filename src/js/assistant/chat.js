@@ -1,16 +1,13 @@
 // Chat Friend + AI bridge with memory + Provider + Optional server TTS (Piper)
-// Мост к плееру (assistant:* → AM.player) монтируется в artists/index.js (player-patch).
 (() => {
-  // Защита от двойной инициализации
-  if (typeof window !== 'undefined' && window.__ASSISTANT_UI_INIT__) return;
-  try { window.__ASSISTANT_UI_INIT__ = true; } catch {}
+  if (window.__ASSISTANT_UI_INIT__) return;
+  window.__ASSISTANT_UI_INIT__ = true;
 
   const API_BASE =
     (import.meta?.env?.VITE_API_URL && import.meta.env.VITE_API_URL.replace(/\/+$/, "")) ||
     (location.hostname === "localhost" ? "http://localhost:8787" : "");
 
-  const isStr = (v) => typeof v === "string" && v.length > 0;
-
+  // --- helpers ---
   function getYouTubeId(urlOrId) {
     if (!urlOrId) return "";
     if (/^[\w-]{11}$/.test(urlOrId)) return urlOrId;
@@ -20,26 +17,13 @@
       const v = u.searchParams.get("v");
       if (v && /^[\w-]{11}$/.test(v)) return v;
       const m = u.pathname.match(/\/(?:embed|v|shorts)\/([^/?#]+)/i);
-      if (m && m[1] && /^[\w-]{11}$/.test(m[1])) return m[1];
+      if (m && m[1] && /^[A-Za-z0-9_-]{11}$/.test(m[1])) return m[1];
     } catch {}
     return "";
   }
+  const isStr = (v) => typeof v === "string" && v.length > 0;
 
-  // Отправка assistant:* в window и document, но с лёгким антидублером
-  const recentEvents = new Map();
-  function dispatch(name, detail = {}) {
-    const key = name + "|" + JSON.stringify(detail || {});
-    const now = Date.now();
-    const last = recentEvents.get(key) || 0;
-    if (now - last < 300) return; // срезаем дубль < 300мс
-    recentEvents.set(key, now);
-
-    const ev = new CustomEvent(`assistant:${name}`, { detail, bubbles: true, composed: true });
-    window.dispatchEvent(ev);
-    document.dispatchEvent(new CustomEvent(`assistant:${name}`, { detail, bubbles: true, composed: true }));
-  }
-
-  // ---------- UI ----------
+  // --- UI ---
   const root = document.createElement("div");
   root.id = "assistant-root";
   root.className = "assistant";
@@ -50,7 +34,6 @@
         <strong>Чат-друг</strong>
         <div class="assistant__hdr-actions">
           <span class="assistant__ai-badge">${API_BASE ? "AI" : ""}</span>
-
           <label class="assistant__prov-wrap" title="Режим ИИ">
             <span class="assistant__prov-label">Режим</span>
             <select id="as-provider">
@@ -59,7 +42,6 @@
               <option value="pro">Pro</option>
             </select>
           </label>
-
           <button class="assistant__gear" aria-label="Настройки">⚙️</button>
           <button class="assistant__close" aria-label="Закрыть">✕</button>
         </div>
@@ -75,28 +57,25 @@
           <span>Голос озвучки</span>
           <select id="as-voice"></select>
         </label>
-
         <label class="assistant__row">
           <span>Серверный TTS (Piper)</span>
           <input id="as-tts-server" type="checkbox" />
           <small class="assistant__hint">Нужно настроить /api/tts на сервере. Иначе будет браузерный голос.</small>
         </label>
-
         <div class="assistant__row">
           <button id="as-test-voice" type="button">Проба голоса</button>
           <button id="as-clear-log" type="button">Очистить чат</button>
         </div>
-
         <div class="assistant__row">
           <small class="assistant__hint">
-            В Edge/Windows часто больше естественных голосов (SpeechSynthesis).
+            Подсказка: в Microsoft Edge доступны более естественные голоса (SpeechSynthesis).
+            На Windows можно поставить дополнительные языковые пакеты — появятся новые голоса.
           </small>
         </div>
       </div>
     </div>`;
   document.body.appendChild(root);
 
-  // Мини-стили
   const style = document.createElement("style");
   style.textContent = `
     .assistant{position:fixed;right:18px;bottom:18px;z-index:9999}
@@ -104,7 +83,7 @@
     .assistant__panel{position:fixed;right:18px;bottom:84px;width:min(92vw,520px);max-height:min(80vh,720px);display:flex;flex-direction:column;background:#111418;border:1px solid rgba(255,255,255,.06);border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.6);overflow:hidden}
     .assistant__header{display:flex;align-items:center;gap:.75rem;padding:.8rem 1rem;background:linear-gradient(180deg,#121821,#0e1318);border-bottom:1px solid rgba(255,255,255,.06)}
     .assistant__hdr-actions{margin-left:auto;display:flex;gap:.5rem;align-items:center}
-    .assistant__ai-badge{font:600 12px/1.2 ui-sans-serif,system-ui,Segoe UI,Arial;color:#9ae6b4;background:#203021;border:1px solid #2b4a2d;padding:.25rem .4rem;border-radius:6px}
+    .assistant__ai-badge{font:600 12px; color:#9ae6b4;background:#203021;border:1px solid #2b4a2d;padding:.25rem .4rem;border-radius:6px}
     .assistant__prov-wrap{display:flex;align-items:center;gap:.35rem;color:#cbd5e1}
     .assistant__prov-wrap select{background:#0b0f14;border:1px solid #263142;color:#e8f1ff;border-radius:8px;padding:.2rem .35rem}
     .assistant__close,.assistant__gear{background:none;border:1px solid rgba(255,255,255,.14);color:#cbd5e1;width:32px;height:32px;border-radius:8px;cursor:pointer}
@@ -141,15 +120,20 @@
   const btnTest  = root.querySelector("#as-test-voice");
   const btnClr   = root.querySelector("#as-clear-log");
 
-  // state
-  const chat = {
-    history: [],
-    lastIds: [],
-    lastGenre: null,
-    lastMood: null
-  };
+  // --- memory (короткая) ---
+  const chat = { history: [], lastIds: [], lastGenre: null, lastMood: null, nowPlaying: null };
 
-  // provider
+  // Now Playing от плеера
+  window.addEventListener("AM.player.track", (e) => {
+    const id = e?.detail?.id || "";
+    const title = String(e?.detail?.title || "");
+    let artist = "", song = "";
+    const m = title.split(" - ");
+    if (m.length >= 2) { artist = m[0].trim(); song = m.slice(1).join(" - ").trim(); }
+    chat.nowPlaying = { id, title, artist, song };
+  });
+
+  // --- Provider pref ---
   const provPref = localStorage.getItem('assistant.provider') || 'auto';
   selProv.value = provPref;
   selProv.addEventListener('change', () => {
@@ -163,13 +147,14 @@
     return undefined; // auto
   }
 
-  // TTS
+  // --- Server TTS pref ---
   chkTTS.checked = localStorage.getItem('assistant.ttsServer') === '1';
   chkTTS.addEventListener('change', () => {
     localStorage.setItem('assistant.ttsServer', chkTTS.checked ? '1' : '0');
     addMsg("note", chkTTS.checked ? 'Серверный TTS включён' : 'Серверный TTS выключен');
   });
 
+  // --- TTS ---
   const tts = { voiceName: localStorage.getItem("assistant.voice") || "" };
   function populateVoices() {
     try {
@@ -203,6 +188,7 @@
     const audio = new Audio(url);
     audio.play().catch(() => {});
   }
+
   function speakBrowser(text) {
     try {
       if (!("speechSynthesis" in window)) return;
@@ -218,6 +204,7 @@
       window.speechSynthesis.speak(u);
     } catch {}
   }
+
   function speak(text) {
     const useServer = chkTTS.checked && !!API_BASE;
     if (useServer) speakServer(text).catch(() => speakBrowser(text));
@@ -226,6 +213,54 @@
 
   btnTest?.addEventListener("click", () => speak("Привет! Я твой голосовой друг."));
   btnClr?.addEventListener("click", () => { logEl.innerHTML = ""; chat.history = []; });
+
+  // --- Sleep timer ---
+  let sleepTimerId = null;
+  function clearSleepTimer() {
+    if (sleepTimerId) { clearTimeout(sleepTimerId); sleepTimerId = null; }
+  }
+  function scheduleSleep(ms) {
+    clearSleepTimer();
+    sleepTimerId = setTimeout(() => {
+      dispatch("player-stop");
+      addMsg("note", "⏰ Таймер: стоп.");
+    }, ms);
+  }
+  function parseSleepDuration(s) {
+    const r = /(\d{1,3})\s*(час(?:ов|а)?|h|hour|hours|мин(?:ут[ы|у])?|m|min|minutes|сек(?:унд[уы])?|s|sec|seconds)/i;
+    const m = String(s||'').toLowerCase().match(r);
+    if (!m) return null;
+    const n = Number(m[1]||0);
+    let unit = m[2]||'';
+    if (/^час|h|hour/.test(unit)) return n*60*60*1000;
+    if (/^мин|m|min/.test(unit))  return n*60*1000;
+    return n*1000;
+  }
+  function parseSleepCommand(t) {
+    // "выключись через 2 минуты", "останови через 30 сек", "stop in 10 min"
+    const s = String(t || "").toLowerCase();
+    const r = /(выключи(?:сь)?|останови|stop)\s*(?:через|in)?\s*(\d{1,3})\s*(сек(?:унд[уы])?|с|sec|seconds|мин(?:ут[ы|у])?|m|min|minutes|час(?:ов|а)?|h|hour|hours)/i;
+    const m = s.match(r);
+    if (!m) return null;
+    const n = Number(m[2] || 0);
+    let unit = m[3] || "";
+    let ms = 0;
+    if (/^час|h|hour/.test(unit)) ms = n * 60 * 60 * 1000;
+    else if (/^мин|m|min/.test(unit)) ms = n * 60 * 1000;
+    else ms = n * 1000;
+    return ms > 0 ? ms : null;
+  }
+
+  // «после текущей песни выключись»
+  let sleepAfterTrack = false;
+  window.addEventListener("AM.player.ended", () => {
+    if (sleepAfterTrack) {
+      sleepAfterTrack = false;
+      clearSleepTimer();
+      dispatch("player-stop");
+      addMsg("note", "⏰ Остановлено после текущего трека.");
+    }
+  });
 
   // log/history
   function addMsg(role, content) {
@@ -244,7 +279,12 @@
     }
   }
 
-  // actions
+  function dispatch(name, detail = {}) {
+    const ev = new CustomEvent(`assistant:${name}`, { detail, bubbles:true, composed:true });
+    window.dispatchEvent(ev);
+    document.dispatchEvent(new CustomEvent(`assistant:${name}`, { detail, bubbles:true, composed:true }));
+  }
+
   function runActions(actions = []) {
     for (const a of actions) {
       if (a?.type === "player" && a.action) {
@@ -260,13 +300,9 @@
       } else if (a?.type === "mixradio") {
         dispatch("mixradio", { start: true });
       } else if (a?.type === "play" && (a.id || a.query)) {
-        // Не доверяем "id" слепо — player-patch валидирует ещё раз
         dispatch("play", { id: a.id, query: a.query });
         const id = getYouTubeId(a.id || a.query);
         if (id) chat.lastIds = [id];
-      } else if (a?.type === "ui" && a.action) {
-        if (a.action === "minimize") dispatch("minimize");
-        if (a.action === "expand")   dispatch("expand");
       }
     }
   }
@@ -281,33 +317,65 @@
     return Array.from(ids);
   }
 
-  // локальные команды (fallback)
-  function handleCommandLocal(t) {
-    const text = (t || "").toLowerCase();
-    const wantsPlay = /включ|поставь|play|запусти|сыграй/.test(text);
+  // Расширенные локальные намерения ДО похода на сервер
+  function tryAdvancedLocalIntents(traw) {
+    const text = String(traw||'').toLowerCase();
 
-    if (/list|список|лист ?вью/.test(text)) { dispatch("view", { mode: "list" }); return "Включаю список"; }
-    if (/grid|сетка|карточк/.test(text))   { dispatch("view", { mode: "grid" }); return "Включаю сетку"; }
-
-    if (/сверн|миним/.test(text)) { dispatch("minimize"); return "Сворачиваю плеер."; }
-    if (/разверн|экспанд/.test(text)) { dispatch("expand"); return "Разворачиваю плеер."; }
-
-    if (/пауза|приприостанов|pause/.test(text)) { dispatch("player-pause"); return "Пауза."; }
-    if (/стоп|останов/.test(text)) { dispatch("player-stop"); return "Остановил."; }
-    if (/дальш|след|next/.test(text)) { dispatch("player-next"); return "Дальше."; }
-    if (/назад|prev|предыду/.test(text)) { dispatch("player-prev"); return "Назад."; }
-
-    if (/mix ?radio|рандом|случайн|подбери|микс ?радио/.test(text)) { dispatch("mixradio", { start: true }); return "Запускаю микс-радио."; }
-
-    if (/громче|увелич.*громк|погромче/.test(text)) { dispatch("volume", { delta: +0.1 }); return "Громче."; }
-    if (/тише|уменьш.*громк|потище|потише/.test(text)) { dispatch("volume", { delta: -0.1 }); return "Тише."; }
-
-    if (wantsPlay) {
-      const cleaned = text.replace(/^(включи|поставь|запусти|сыграй)\s*/,'').trim();
-      dispatch("recommend", { like: cleaned || "popular hits playlist", autoplay: true });
-      return "Ставлю…";
+    // 1) Таймер выключения
+    const msSleep = parseSleepCommand(text);
+    if (msSleep) {
+      addMsg("bot", `Ок, выключу через ${Math.round(msSleep/1000)} сек.`);
+      speak(`Выключу через ${Math.round(msSleep/1000)} секунд`);
+      scheduleSleep(msSleep);
+      return true;
     }
-    return "";
+
+    // 2) Выключись после текущей песни
+    if (/(после (этой|текущей) (песни|композиции|трек[аи])|after this (song|track))/i.test(text)) {
+      sleepAfterTrack = true;
+      addMsg("bot", "Ок, выключу после текущего трека.");
+      speak("Выключу после текущего трека");
+      // Доп. страховка: отменим любой отложенный таймер
+      clearSleepTimer();
+      // Сообщим плееру через глобальный флаг (используется внутри player.js на ENDED)
+      try { window.__AM_SLEEP_AFTER__ = true; } catch {}
+      return true;
+    }
+
+    // 3) «хитов этого артиста 2 часа/30 минут»
+    const reThisArtist = /(хит(?:ов|ы)|лучшие|best of|hits).*(этого артиста).*(\d{1,2}.*(час|мин))/i;
+    const reNamed = /(хит(?:ов|ы)|лучшие|best of|hits)\s+([a-zа-яёіїє .'\-]+?)\s+(?:на|в течение|на протяжении)?\s*(\d{1,2}\s*(?:час|часа|часов|мин|минут|minutes?|hours?))/i;
+
+    let artist = "";
+    let durStr = "";
+
+    let m = text.match(reThisArtist);
+    if (m && chat.nowPlaying?.artist) {
+      artist = chat.nowPlaying.artist;
+      durStr = m[3] || "";
+    } else {
+      m = text.match(reNamed);
+      if (m) {
+        artist = (m[2] || "").trim();
+        durStr = m[3] || "";
+      }
+    }
+
+    if (artist && durStr) {
+      const ms = parseSleepDuration(durStr);
+      if (ms) {
+        const q = `${artist} greatest hits playlist`;
+        addMsg("bot", `Ок, хиты ${artist} — поехали. Выключу через ${Math.round(ms/60000)} мин.`);
+        speak(`Включаю хиты ${artist}. Выключу через ${Math.round(ms/60000)} минут`);
+        // запускаем поток
+        dispatch("play", { query: q });
+        // и ставим таймер
+        scheduleSleep(ms);
+        return true;
+      }
+    }
+
+    return false;
   }
 
   // API
@@ -328,6 +396,10 @@
 
     addMsg("user", v);
 
+    // Расширенные локальные намерения (таймеры/хиты) — до сервера
+    if (tryAdvancedLocalIntents(v)) return;
+
+    // 1) Пытаемся через сервер ИИ
     try {
       const data = await callAI(v);
       if (data && isStr(data.reply)) {
@@ -346,19 +418,73 @@
           }
           runActions(actions);
         } else {
-          const localReply = handleCommandLocal(v) || "";
-          if (localReply) addMsg("note", `[${localReply}]`);
+          const localReply = handleCommandLocal(v);
+          addMsg("note", "[" + localReply + "]");
         }
+
+        if (isStr(data.explain)) addMsg("note", "[" + data.explain + "]");
         return;
       }
     } catch (e) {
       console.warn("AI API error", e);
     }
 
-    // Фоллбэк: сервер молчит/ошибка
-    const reply = handleCommandLocal(v) || "Готово.";
+    // 2) Фоллбэк
+    const reply = handleCommandLocal(v);
     addMsg("bot", reply);
     speak(reply);
+  }
+
+  // Простой локальный фоллбэк (управление/жанры/муд)
+  function handleCommandLocal(t) {
+    const text = (t || "").toLowerCase();
+    const wantsPlay = /включ|поставь|play|запусти|вруби|сыграй/.test(text);
+
+    if (/list|список|лист ?вью/.test(text)) { dispatch("view", { mode: "list" }); return "Включаю список"; }
+    if (/grid|сетка|карточк/.test(text))   { dispatch("view", { mode: "grid" }); return "Включаю сетку"; }
+    if (/next|след/.test(text))            { dispatch("player-next"); return "Следующий трек"; }
+    if (/prev|пред/.test(text))            { dispatch("player-prev"); return "Предыдущий трек"; }
+    if (/пауза|стоп|pause|останов/.test(text)) { dispatch("player-pause"); dispatch("player-stop"); return "Пауза"; }
+
+    // Отмена таймера
+    if (/(отмени|сбрось|cancel).*(таймер|timer)/.test(text)) { clearSleepTimer(); return "Таймер отменён"; }
+
+    // «другую песню / ещё»
+    if (/(друг(ую|ой)|ещё|еще|another)/.test(text)) { dispatch("player-next"); return "Следующий трек"; }
+
+    // «включи»
+    if (/play|плей|включи|вруби|сыграй/.test(text)) {
+      if (chat.lastIds.length) dispatch("play", { id: chat.lastIds[0] }); else dispatch("mixradio", { start: true });
+      return "Играю";
+    }
+
+    if (/тише|quieter|volume down|поменьше/.test(text)) { dispatch("volume", { delta: -0.1 }); return "Тише"; }
+    if (/громче|louder|volume up|погромче/.test(text))  { dispatch("volume", { delta: +0.1 }); return "Громче"; }
+    if (/(mix ?radio|микс|радио|random)/.test(text))    { dispatch("mixradio", { start: true }); return "Mix Radio"; }
+
+    if (/^(?:включи|поставь|запусти|найди|знайди)\s+.+/i.test(text)) {
+      const like = text.replace(/^(?:включи|поставь|запусти|найди|знайди)\s+/i, "").trim();
+      if (like) { dispatch("recommend", { like, autoplay: true }); return "Шукаю та вмикаю…"; }
+    }
+
+    const moods = [
+      { re: /(весел|радіс|радост|happy|joy)/, mood: "happy" },
+      { re: /(спок|calm|chill|relax)/,        mood: "calm" },
+      { re: /(сум|sad|minor)/,                mood: "sad" },
+      { re: /(енерг|drive|бадьор|рок|rock)/,  mood: "energetic" }
+    ];
+    const m = moods.find(m => m.re.test(text));
+    if (m) { dispatch("recommend", { mood: m.mood, autoplay: wantsPlay }); chat.lastMood = m.mood; return wantsPlay ? "Підбираю та вмикаю…" : "Підбираю під настрій"; }
+
+    const g = text.match(/жанр\s*([a-zа-яёіїє-]+)/i);
+    if (g && g[1]) { dispatch("recommend", { genre: g[1], autoplay: wantsPlay }); chat.lastGenre = g[1]; return wantsPlay ? `Жанр ${g[1]}, запускаю…` : `Жанр: ${g[1]}`; }
+
+    if (/из (этого|того) списка|из предложенного|любой из списка/.test(text)) {
+      if (chat.lastIds.length) { dispatch("play", { id: chat.lastIds[0] }); return "Запускаю из последнего списка"; }
+      dispatch("mixradio", { start: true }); return "Включаю из своих рекомендаций";
+    }
+
+    return "Я здесь. Могу переключать вид, управлять треком и подбирать музыку по настроению.";
   }
 
   // Mic
@@ -374,17 +500,17 @@
           const t = ev.results?.[0]?.[0]?.transcript || "";
           handleUserText(t);
         };
-        rec.onerror = () => { addMsg("bot", "Не вышло распознать голос"); };
+        rec.onerror = () => { addMsg("bot","Не вышло распознать голос"); };
         rec.onend = () => btnMic.classList.remove("is-on");
         rec.start();
       } catch {
-        addMsg("bot", "Розпізнавач недоступний");
+        addMsg("bot","Розпізнавач недоступний");
       }
     });
   }
 
   // wiring
-  btnOpen.addEventListener("click", () => { panel.hidden = !panel.hidden; if (!panel.hidden) inputEl?.focus(); });
+  root.querySelector(".assistant__toggle").addEventListener("click", () => { panel.hidden = !panel.hidden; });
   btnClose.addEventListener("click", () => { panel.hidden = true; });
   btnGear.addEventListener("click", () => {
     const s = root.querySelector(".assistant__settings");
@@ -396,9 +522,4 @@
   inputEl.addEventListener("keydown", (e) => {
     if (e.key === "Enter") { const t = inputEl.value; inputEl.value = ""; handleUserText(t); }
   });
-
-  // приветствие
-  setTimeout(() => {
-    addMsg("bot", "Привет! Скажи, что включить: «включи джаз», «поставь Queen», «сделай тише», «mix radio»…");
-  }, 400);
 })();

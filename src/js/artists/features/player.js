@@ -2,17 +2,14 @@
 /* global YT */
 
 /**
- * Mini YouTube player (superset, v2.2.0)
+ * Mini YouTube player (superset, v2.3.1)
  * — сохраняет ВСЁ из твоей версии (UI, bubble, drag-n-dock, прогресс, mute, volume)
- * — добавляет: playSearch(query) + гидратацию очереди из YT-плейлиста
- * — next/prev умеют работать и при search-плейлисте (fallback на yt.next/previousVideo)
+ * — добавляет: server-search → стабильная очередь ID (без «зацикливания первой»)
+ * — playSearch: сперва /api/yt/search (если доступно), затем фоллбэк на YT search playlist
+ * — open: мягкий фоллбэк — если пришёл невалидный ID/URL, трактуем как поисковый запрос
+ * — добавляет «sleep after current»: флаг window.__AM_SLEEP_AFTER__ останавливает плеер после текущего трека
  * — не ломает публичное API: openQueue, play, pause, stop, next, prev, setVolume/getVolume, minimize/expand
  * — эмитит совместимые события AM.player.* (ready/state/error/minimized/expanded/track)
- *
- * v2.2.0 — правки:
- * 1) getYouTubeId: строгая валидация ID из /embed|shorts|v/.
- * 2) open: при невалидном ID/URL — мягкий fallback в playSearch (без "Invalid video id").
- * 3) playSearch: index:0 и мягкая стабилизация старта.
  */
 
 let _instance = null;
@@ -51,7 +48,7 @@ function getYouTubeId(urlOrId) {
     const v = u.searchParams.get("v");
     if (v && /^[A-Za-z0-9_-]{11}$/.test(v)) return v;
     const m = u.pathname.match(/\/(?:embed|shorts|v)\/([^/?#]+)/i);
-    if (m && m[1] && /^[A-Za-z0-9_-]{11}$/.test(m[1])) return m[1]; // 🔧 строгая проверка
+    if (m && m[1] && /^[A-Za-z0-9_-]{11}$/.test(m[1])) return m[1];
   } catch { /* ignore */ }
   return "";
 }
@@ -69,6 +66,25 @@ function fmtTimeSec(sec) {
   const m = Math.floor(sec / 60);
   const s = String(sec % 60).padStart(2, "0");
   return `${m}:${s}`;
+}
+
+/* -------------------- Server search support -------------------- */
+const API_BASE =
+  (import.meta?.env?.VITE_API_URL && import.meta.env.VITE_API_URL.replace(/\/+$/, "")) ||
+  (location.hostname === "localhost" ? "http://localhost:8787" : "");
+
+async function fetchYTSearchIds(q, max = 25) {
+  if (!API_BASE) return [];
+  try {
+    const r = await fetch(`${API_BASE}/api/yt/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ q, max })
+    });
+    if (!r.ok) return [];
+    const j = await r.json();
+    return Array.isArray(j?.ids) ? j.ids.filter(x => /^[A-Za-z0-9_-]{11}$/.test(x)) : [];
+  } catch { return []; }
 }
 
 /* -------------------- Экспортируемая фабрика -------------------- */
@@ -384,6 +400,12 @@ export function createMiniPlayer() {
             clearTimer();
             clearWatchdog();
             emit("ended", {});
+            // ⏰ Sleep-after-current: если стоит флаг — останавливаемся вместо next
+            if (window.__AM_SLEEP_AFTER__) {
+              try { window.__AM_SLEEP_AFTER__ = false; } catch {}
+              stop();
+              return;
+            }
             autoNext();
           }
         },
@@ -575,7 +597,7 @@ export function createMiniPlayer() {
   async function open(urlOrId) {
     const id = getYouTubeId(urlOrId);
     if (!id) {
-      // 🔧 Мягкий fallback: если пришёл невалидный ID/URL — трактуем как поиск
+      // Мягкий fallback: если пришёл невалидный ID/URL — трактуем как поиск
       const q = String(urlOrId || "").trim();
       if (q) return playSearch(q);
       return;
@@ -646,12 +668,24 @@ export function createMiniPlayer() {
     const q = String(query || "").trim();
     if (!q) return;
     uiMin(false); uiShow(true); restoreDockPos();
+
+    // 1) Пробуем серверный поиск (стабильная очередь ID)
+    const ids = await fetchYTSearchIds(q, 25);
+    if (ids.length > 1) {
+      await openQueue(ids, { shuffle: false, startIndex: 0 });
+      return;
+    } else if (ids.length === 1) {
+      await open(ids[0]);
+      return;
+    }
+
+    // 2) Фоллбэк — YT search playlist (как было)
     await ensureYT(null);
     try {
-      // 🔧 Явно указываем index:0
       yt.loadPlaylist({ listType: "search", list: q, index: 0 });
       yt.playVideo?.();
       clearSearchWatch();
+      // hydrateFromYTPlaylist подтянет очередь дальше
       searchWatchdogId = setTimeout(() => {
         hydrateFromYTPlaylist();
         try {
@@ -702,3 +736,4 @@ const Player = {
 };
 
 export default Player;
+
