@@ -1,5 +1,5 @@
-// Chat Friend + AI bridge with memory + Provider + Optional server TTS (Piper)
-// VERSION: chat.js v2.3.1 (server TTS buffered) — 2025-09-10
+// Chat Friend + AI bridge with memory + Provider + Server/Browser TTS
+// VERSION: chat.js v2.3.4 (forced-next + lang-lock + TTS hard pin + random mix) — 2025-09-10
 (() => {
   if (window.__ASSISTANT_UI_INIT__) return;
   window.__ASSISTANT_UI_INIT__ = true;
@@ -8,7 +8,7 @@
     (import.meta?.env?.VITE_API_URL && import.meta.env.VITE_API_URL.replace(/\/+$/, "")) ||
     (location.hostname === "localhost" ? "http://localhost:8787" : "");
 
-  // --- helpers ---
+  // ─── helpers ─────────────────────────────────────────────────────────
   function getYouTubeId(urlOrId) {
     if (!urlOrId) return "";
     if (/^[\w-]{11}$/.test(urlOrId)) return urlOrId;
@@ -23,8 +23,36 @@
     return "";
   }
   const isStr = (v) => typeof v === "string" && v.length > 0;
+  // ключевой регекс: всё, что похоже на «следующая/другая/инша/another/next/skip»
+  const NEXT_RE = /\b(следующ(ую|ий|ая)|друг(ую|ой)|ин(ую|ой)|нов(ую|ый)|another|next|skip|скип)\b/i;
 
-  // --- UI ---
+  // ─── language lock ───────────────────────────────────────────────────
+  const state = {
+    langPref: (localStorage.getItem("assistant.lang") || "").toLowerCase() || (
+      (navigator.language||"").toLowerCase().startsWith("uk") ? "uk" :
+      (navigator.language||"").toLowerCase().startsWith("en") ? "en" : "ru"
+    )
+  };
+  function pinLang(lang) {
+    const v = (lang||"").toLowerCase();
+    if (v === "ru" || v === "uk" || v === "en") {
+      state.langPref = v;
+      try { localStorage.setItem("assistant.lang", v); } catch {}
+      addMsg("note", `Язык речи закреплён: ${v.toUpperCase()}`);
+    }
+  }
+  function codeToBCP47(v) { return v==="uk"?"uk-UA": v==="ru"?"ru-RU":"en-US"; }
+
+  // Явные команды «говори по-…»
+  function tryExplicitLangSwitch(text="") {
+    const s = String(text).toLowerCase();
+    if (/на\s+українськ|украинск|українською|укр\b/.test(s)) { pinLang("uk"); return true; }
+    if (/на\s+русск|російськ|по-русски|російською|рус\b/.test(s)) { pinLang("ru"); return true; }
+    if (/\bin english\b|на\s+английск|англійською|english\b/.test(s)) { pinLang("en"); return true; }
+    return false;
+  }
+
+  // ─── UI ──────────────────────────────────────────────────────────────
   const root = document.createElement("div");
   root.id = "assistant-root";
   root.className = "assistant";
@@ -69,8 +97,7 @@
         </div>
         <div class="assistant__row">
           <small class="assistant__hint">
-            Подсказка: в Microsoft Edge доступны более естественные голоса (SpeechSynthesis).
-            На Windows можно поставить дополнительные языковые пакеты — появятся новые голоса.
+            Порада: у Microsoft Edge часто кращі системні голоси (SpeechSynthesis).
           </small>
         </div>
       </div>
@@ -121,10 +148,9 @@
   const btnTest  = root.querySelector("#as-test-voice");
   const btnClr   = root.querySelector("#as-clear-log");
 
-  // --- memory (короткая) ---
+  // ─── memory ───────────────────────────────────────────────────────────
   const chat = { history: [], lastIds: [], lastGenre: null, lastMood: null, nowPlaying: null };
 
-  // Now Playing от плеера
   window.addEventListener("AM.player.track", (e) => {
     const id = e?.detail?.id || "";
     const title = String(e?.detail?.title || "");
@@ -134,7 +160,7 @@
     chat.nowPlaying = { id, title, artist, song };
   });
 
-  // --- Provider pref ---
+  // ─── Provider pref ───────────────────────────────────────────────────
   const provPref = localStorage.getItem('assistant.provider') || 'auto';
   selProv.value = provPref;
   selProv.addEventListener('change', () => {
@@ -148,14 +174,14 @@
     return undefined; // auto
   }
 
-  // --- Server TTS pref ---
+  // ─── Server TTS pref ─────────────────────────────────────────────────
   chkTTS.checked = localStorage.getItem('assistant.ttsServer') === '1';
   chkTTS.addEventListener('change', () => {
     localStorage.setItem('assistant.ttsServer', chkTTS.checked ? '1' : '0');
     addMsg("note", chkTTS.checked ? 'Серверный TTS включён' : 'Серверный TTS выключен');
   });
 
-  // --- TTS ---
+  // ─── Voices list (browser) ───────────────────────────────────────────
   const tts = { voiceName: localStorage.getItem("assistant.voice") || "" };
   function populateVoices() {
     try {
@@ -173,10 +199,10 @@
   selVoice?.addEventListener("change", () => {
     tts.voiceName = selVoice.value || "";
     localStorage.setItem("assistant.voice", tts.voiceName);
-    speak("Голос выбран");
+    speak(sampleByLang(state.langPref));
   });
 
-  // ─── НОВОЕ: лёгкий детект языка для Piper ───────────────────────────
+  // ─── lang detection (heuristics only; lock не меняет) ────────────────
   function detectLang(text = "") {
     const s = String(text);
     if (/[ґєіїҐЄІЇ]/.test(s)) return "uk";
@@ -184,55 +210,82 @@
     return "en";
   }
 
-  // ─── НОВОЕ: безопасный серверный TTS (буферная отдача) ───────────────
+  // ─── server TTS (buffered, explicit lang) ────────────────────────────
   async function speakServer(text, lang) {
     if (!API_BASE) throw new Error('no API');
-    const r = await fetch(`${API_BASE}/api/tts`, {
+    const url = `${API_BASE}/api/tts?lang=${encodeURIComponent(lang||'')}`;
+    const r = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json; charset=utf-8' },
       body: JSON.stringify({ text, lang })
     });
-    if (!r.ok) throw new Error(`tts unavailable ${r.status}`);
-    // ЖДЁМ ПОЛНЫЙ БУФЕР, а не стримим
+    if (!r.ok) {
+      let msg = `tts ${r.status}`;
+      try { const j = await r.json(); if (j?.error) msg += ` ${j.error}`; } catch {}
+      throw new Error(msg);
+    }
     const buf = await r.arrayBuffer();
-    const url = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
-    const audio = new Audio(url);
+    const urlObj = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+    const audio = new Audio(urlObj);
     audio.preload = 'auto';
     try { await audio.play(); } catch (e) { console.warn('[tts] play() blocked:', e); }
-    audio.onended = () => URL.revokeObjectURL(url);
+    audio.onended = () => URL.revokeObjectURL(urlObj);
     audio.onerror = () => console.error('[tts] audio error:', audio.error);
   }
+  // совместимый алиас
+  async function ttsServerSpeak(text, lang) { return speakServer(text, lang); }
 
-  function speakBrowser(text) {
+  // ─── browser TTS (forced lang; ignore wrong-voice) ───────────────────
+  function speakBrowser(text, lang) {
     try {
       if (!("speechSynthesis" in window)) return;
+      try { window.speechSynthesis.cancel(); } catch {}
       const u = new SpeechSynthesisUtterance(text);
+      const want = codeToBCP47(lang);
+      const voices = window.speechSynthesis.getVoices();
+
+      let voiceSet = false;
       if (tts.voiceName) {
-        const v = window.speechSynthesis.getVoices().find(v => v.name === tts.voiceName);
-        if (v) u.voice = v;
-      } else {
-        const lang = (navigator.language || "en-US").toLowerCase();
-        u.lang = lang.startsWith("uk") ? "uk-UA" : lang.startsWith("ru") ? "ru-RU" : "en-US";
+        const v = voices.find(v => v.name === tts.voiceName && String(v.lang||"").toLowerCase().startsWith(want.slice(0,2)));
+        if (v) { u.voice = v; voiceSet = true; }
       }
+      if (!voiceSet) {
+        const best = voices.find(v => String(v.lang||"").toLowerCase().startsWith(want.slice(0,2)));
+        if (best) u.voice = best;
+      }
+
+      u.lang = want;
       u.rate = 1; u.pitch = 1;
       window.speechSynthesis.speak(u);
     } catch {}
   }
 
+  // ─── public speak() ──────────────────────────────────────────────────
   function speak(text) {
+    const lang = state.langPref; // ЖЁСТКИЙ ЛОК
     const useServer = chkTTS.checked && !!API_BASE;
-    if (useServer) speakServer(text, detectLang(text)).catch(() => speakBrowser(text));
-    else speakBrowser(text);
+    if (useServer) {
+      speakServer(text, lang).catch((err) => {
+        console.warn('[tts] server failed → browser fallback:', err?.message || err);
+        addMsg("note", `[TTS fallback → ${lang}]`);
+        speakBrowser(text, lang);
+      });
+    } else {
+      speakBrowser(text, lang);
+    }
+  }
+  function sampleByLang(lang){
+    return lang==='uk' ? 'Привіт! Перевірка голосу.'
+         : lang==='en' ? 'Hello! This is a voice test.'
+         : 'Привет! Проверка голоса.';
   }
 
-  btnTest?.addEventListener("click", () => speak("Привет! Я твой голосовой друг."));
+  btnTest?.addEventListener("click", () => speak(sampleByLang(state.langPref)));
   btnClr?.addEventListener("click", () => { logEl.innerHTML = ""; chat.history = []; });
 
-  // === Sleep timer (helpers) ===
+  // === Sleep timer (helpers) ===========================================
   let sleepTimerId = null;
-  function clearSleepTimer() {
-    if (sleepTimerId) { clearTimeout(sleepTimerId); sleepTimerId = null; }
-  }
+  function clearSleepTimer() { if (sleepTimerId) { clearTimeout(sleepTimerId); sleepTimerId = null; } }
   function scheduleSleep(ms) {
     clearSleepTimer();
     sleepTimerId = setTimeout(() => {
@@ -250,27 +303,11 @@
     if (/^мин|m|min/.test(unit))  return n*60*1000;
     return n*1000;
   }
-  function parseSleepCommand(t) {
-    // "выключись через 2 минуты", "останови через 30 сек", "stop in 10 min"
-    const s = String(t || "").toLowerCase();
-    const r = /(выключи(?:сь)?|останови|stop)\s*(?:через|in)?\s*(\d{1,3})\s*(сек(?:унд[уы])?|с|sec|seconds|мин(?:ут[ы|у])?|m|min|minutes|час(?:ов|а)?|h|hour|hours)/i;
-    const m = s.match(r);
-    if (!m) return null;
-    const n = Number(m[2] || 0);
-    let unit = m[3] || "";
-    let ms = 0;
-    if (/^час|h|hour/.test(unit)) ms = n * 60 * 60 * 1000;
-    else if (/^мин|m|min/.test(unit)) ms = n * 60 * 1000;
-    else ms = n * 1000;
-    return ms > 0 ? ms : null;
-  }
-  // Доп. парсер для «подавления мгновенного stop» от ИИ
   function parseDelaySpec(text = "") {
     const s = String(text).toLowerCase();
     if (/(после\s+(этой|текущей)\s+(песни|композиции|трека)|after\s+(this|current)\s+(song|track))/.test(s)) {
       return { afterCurrent: true };
     }
-    // «через 15 сек/мин/час» без обязательного слова «выключись»
     const m = s.match(/через\s+(\d{1,3})\s*(сек(?:унд[уы])?|с|sec|seconds|мин(?:ут[ы|у])?|m|min|minutes|час(?:ов|а)?|h|hour|hours)\b/);
     if (m) {
       const n = Number(m[1] || 0);
@@ -284,7 +321,6 @@
     return null;
   }
 
-  // «после текущей песни выключись»
   let sleepAfterTrack = false;
   window.addEventListener("AM.player.ended", () => {
     if (sleepAfterTrack) {
@@ -295,7 +331,7 @@
     }
   });
 
-  // log/history
+  // ─── log/history ─────────────────────────────────────────────────────
   function addMsg(role, content) {
     const cls = role === "user" ? "assistant__msg--user"
       : role === "bot" ? "assistant__msg--bot"
@@ -318,6 +354,57 @@
     document.dispatchEvent(new CustomEvent(`assistant:${name}`, { detail, bubbles:true, composed:true }));
   }
 
+  // ─── mix seeds (рандом) ──────────────────────────────────────────────
+  const MIX_SEEDS = [
+    'lofi hip hop radio',
+    'classic rock hits',
+    'best jazz music relaxing',
+    'indie rock playlist',
+    'hip hop playlist',
+    'edm house techno mix',
+    'ambient music long playlist',
+    'pop hits playlist',
+    'latin hits playlist',
+    'rnb soul classics playlist',
+    'best reggae mix'
+  ];
+  function randomMixSeed() {
+    return MIX_SEEDS[(Math.random()*MIX_SEEDS.length)|0];
+  }
+  function ensureMoodQuery(mood) {
+    const m = String(mood||'').toLowerCase();
+    if (m === 'happy') return 'upbeat feel good hits';
+    if (m === 'calm')  return 'lofi chill beats to relax';
+    if (m === 'sad')   return 'sad emotional songs playlist';
+    if (m === 'energetic') return 'high energy workout rock mix';
+    return 'music radio mix';
+  }
+  function ensureGenreQuery(genre) {
+    const g = String(genre||'').toLowerCase();
+    const map = {
+      'джаз':'best jazz music relaxing',
+      'рок':'classic rock hits',
+      'поп':'pop hits playlist',
+      'электрон':'edm house techno mix',
+      'lofi':'lofi hip hop radio',
+      'классик':'classical symphony playlist',
+      'рэп':'hip hop playlist',
+      'инди':'indie rock playlist',
+      'ambient':'ambient music long playlist',
+      'блюз':'best blues songs playlist',
+      'шансон':'russian chanson mix',
+      'folk':'folk acoustic playlist',
+      'rnb':'rnb soul classics playlist',
+      'latin':'latin hits playlist',
+      'reggae':'best reggae mix',
+      'k-pop':'kpop hits playlist',
+      'j-pop':'jpop hits playlist',
+      'soundtrack':'movie soundtrack playlist'
+    };
+    return map[g] || `${g} music playlist`;
+  }
+
+  // ─── actions runner ──────────────────────────────────────────────────
   function runActions(actions = []) {
     for (const a of actions) {
       if (a?.type === "player" && a.action) {
@@ -328,10 +415,16 @@
         dispatch("recommend", a);
         if (a.genre) chat.lastGenre = a.genre;
         if (a.mood)  chat.lastMood  = a.mood;
+        if (a.autoplay && (a.genre || a.mood || a.like)) {
+          const q = a.like ? a.like
+            : a.genre ? ensureGenreQuery(a.genre)
+            : ensureMoodQuery(a.mood);
+          dispatch("play", { query: q });
+        }
       } else if (a?.type === "volume") {
         dispatch("volume", a);
       } else if (a?.type === "mixradio") {
-        dispatch("mixradio", { start: true });
+        dispatch("play", { query: randomMixSeed() });
       } else if (a?.type === "ui" && a.action) {
         if (a.action === "minimize") dispatch("minimize");
         else if (a.action === "expand") dispatch("expand");
@@ -353,12 +446,27 @@
     return Array.from(ids);
   }
 
-  // Расширенные локальные намерения ДО похода на сервер
+  // ─── local intents before server ─────────────────────────────────────
   function tryAdvancedLocalIntents(traw) {
     const text = String(traw||'').toLowerCase();
 
-    // 1) Таймер выключения
-    const msSleep = parseSleepCommand(text);
+    // явное переключение языка
+    if (tryExplicitLangSwitch(text)) {
+      speak(sampleByLang(state.langPref));
+      return true;
+    }
+
+    // sleep timer
+    const msSleep = (function parseSleepCommand(s) {
+      const r = /(выключи(?:сь)?|останови|stop)\s*(?:через|in)?\s*(\d{1,3})\s*(сек(?:унд[уы])?|с|sec|seconds|мин(?:ут[ы|у])?|m|min|minutes|час(?:ов|а)?|h|hour|hours)/i;
+      const m = s.match(r); if (!m) return null;
+      const n = Number(m[2] || 0); let unit = m[3] || ""; let ms = 0;
+      if (/^час|h|hour/.test(unit)) ms = n * 3600000;
+      else if (/^мин|m|min/.test(unit)) ms = n * 60000;
+      else ms = n * 1000;
+      return ms > 0 ? ms : null;
+    })(text);
+
     if (msSleep) {
       addMsg("bot", `Ок, выключу через ${Math.round(msSleep/1000)} сек.`);
       speak(`Выключу через ${Math.round(msSleep/1000)} секунд`);
@@ -366,7 +474,6 @@
       return true;
     }
 
-    // 2) Выключись после текущей песни
     if (/(после (этой|текущей) (песни|композиции|трек[аи])|after this (song|track))/i.test(text)) {
       sleepAfterTrack = true;
       addMsg("bot", "Ок, выключу после текущего трека.");
@@ -376,25 +483,12 @@
       return true;
     }
 
-    // 3) «хитов этого артиста 2 часа/30 минут»
+    // «хиты <артист> на 2 часа»
     const reThisArtist = /(хит(?:ов|ы)|лучшие|best of|hits).*(этого артиста).*(\d{1,2}.*(час|мин))/i;
     const reNamed = /(хит(?:ов|ы)|лучшие|best of|hits)\s+([a-zа-яёіїє .'\-]+?)\s+(?:на|в течение|на протяжении)?\s*(\d{1,2}\s*(?:час|часа|часов|мин|минут|minutes?|hours?))/i;
-
-    let artist = "";
-    let durStr = "";
-
-    let m = text.match(reThisArtist);
-    if (m && chat.nowPlaying?.artist) {
-      artist = chat.nowPlaying.artist;
-      durStr = m[3] || "";
-    } else {
-      m = text.match(reNamed);
-      if (m) {
-        artist = (m[2] || "").trim();
-        durStr = m[3] || "";
-      }
-    }
-
+    let artist = "", durStr = ""; let m = text.match(reThisArtist);
+    if (m && chat.nowPlaying?.artist) { artist = chat.nowPlaying.artist; durStr = m[3] || ""; }
+    else { m = text.match(reNamed); if (m) { artist = (m[2] || "").trim(); durStr = m[3] || ""; } }
     if (artist && durStr) {
       const ms = parseSleepDuration(durStr);
       if (ms) {
@@ -410,13 +504,18 @@
     return false;
   }
 
-  // API
+  // ─── API ─────────────────────────────────────────────────────────────
   async function callAI(message) {
     if (!API_BASE) return null;
     const r = await fetch(`${API_BASE}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, history: chat.history, provider: providerToSend() })
+      body: JSON.stringify({
+        message,
+        history: chat.history,
+        provider: providerToSend(),
+        langHint: state.langPref   // <── держать один язык
+      })
     });
     if (!r.ok) throw new Error(`API ${r.status}`);
     return r.json();
@@ -428,15 +527,22 @@
 
     addMsg("user", v);
 
-    // Расширенные локальные намерения (таймеры/хиты) — до сервера
     if (tryAdvancedLocalIntents(v)) return;
 
-    // Подсказка: если пользователь сказал «через ...» или «после текущей песни»,
-    // а ИИ вернет мгновенный stop — мы его подавим и поставим локальный таймер.
-    const delaySpec = parseDelaySpec(v);
+    const delaySpec = (function parseDelaySpec(s=""){
+      s = s.toLowerCase();
+      if (/(после\s+(этой|текущей)\s+(песни|композиции|трека)|after\s+(this|current)\s+(song|track))/.test(s)) return { afterCurrent:true };
+      const m = s.match(/через\s+(\d{1,3})\s*(сек(?:унд[уы])?|с|sec|seconds|мин(?:ут[ы|у])?|m|min|minutes|час(?:ов|а)?|h|hour|hours)\b/);
+      if (m) {
+        const n = Number(m[1]||0); const u=m[2]||""; let ms=0;
+        if (/^час|h|hour/.test(u)) ms=n*3600000; else if (/^мин|m|min/.test(u)) ms=n*60000; else ms=n*1000;
+        if (ms>0) return {ms};
+      }
+      return null;
+    })(v);
     const suppressImmediateStop = !!(delaySpec && (delaySpec.ms || delaySpec.afterCurrent));
+    const forcedNext = NEXT_RE.test(v); // <── ЖЁСТКИЙ NEXT
 
-    // 1) Пытаемся через сервер ИИ
     try {
       const data = await callAI(v);
       if (data && isStr(data.reply)) {
@@ -444,11 +550,13 @@
         if (harvested.length) chat.lastIds = harvested;
 
         addMsg("bot", data.reply);
-        speak(data.reply);
+        speak(data.reply); // озвучиваем выбранным языком
 
         let actions = Array.isArray(data.actions) ? data.actions : [];
+        if (forcedNext) {
+          actions = [{ type: 'player', action: 'next' }]; // <── override любых play/query
+        }
         if (actions.length) {
-          // подавим немедленный stop, если просили задержку
           if (suppressImmediateStop) {
             actions = actions.filter(a => !(a?.type === 'player' && a.action === 'stop'));
           }
@@ -459,7 +567,6 @@
           }
           runActions(actions);
 
-          // после выполнения — если была задержка, ставим таймер/флаг
           if (delaySpec?.ms) {
             addMsg("note", `⏰ Выключусь через ~${Math.round(delaySpec.ms/1000)} сек.`);
             scheduleSleep(delaySpec.ms);
@@ -488,42 +595,40 @@
       console.warn("AI API error", e);
     }
 
-    // 2) Фоллбэк
     const reply = handleCommandLocal(v);
     addMsg("bot", reply);
     speak(reply);
   }
 
-  // Простой локальный фоллбэк (управление/жанры/муд)
+  // ─── local fallback for simple commands ──────────────────────────────
   function handleCommandLocal(t) {
     const text = (t || "").toLowerCase();
     const wantsPlay = /включ|поставь|play|запусти|вруби|сыграй/.test(text);
 
     if (/list|список|лист ?вью/.test(text)) { dispatch("view", { mode: "list" }); return "Включаю список"; }
     if (/grid|сетка|карточк/.test(text))   { dispatch("view", { mode: "grid" }); return "Включаю сетку"; }
-    if (/next|след/.test(text))            { dispatch("player-next"); return "Следующий трек"; }
+
+    // единое правило next/another/инша/новая…
+    if (NEXT_RE.test(text)) { dispatch("player-next"); return "Следующий трек"; }
+
     if (/prev|пред/.test(text))            { dispatch("player-prev"); return "Предыдущий трек"; }
     if (/пауза|стоп|pause|останов/.test(text)) { dispatch("player-pause"); dispatch("player-stop"); return "Пауза"; }
 
-    // Отмена таймера
     if (/(отмени|сбрось|cancel).*(таймер|timer)/.test(text)) { clearSleepTimer(); return "Таймер отменён"; }
 
-    // «другую песню / ещё»
-    if (/(друг(ую|ой)|ещё|еще|another)/.test(text)) { dispatch("player-next"); return "Следующий трек"; }
-
-    // «включи»
     if (/play|плей|включи|вруби|сыграй/.test(text)) {
-      if (chat.lastIds.length) dispatch("play", { id: chat.lastIds[0] }); else dispatch("mixradio", { start: true });
+      if (chat.lastIds.length) dispatch("play", { id: chat.lastIds[0] });
+      else dispatch("play", { query: randomMixSeed() });
       return "Играю";
     }
 
     if (/тише|quieter|volume down|поменьше/.test(text)) { dispatch("volume", { delta: -0.1 }); return "Тише"; }
     if (/громче|louder|volume up|погромче/.test(text))  { dispatch("volume", { delta: +0.1 }); return "Громче"; }
-    if (/(mix ?radio|микс|радио|random)/.test(text))    { dispatch("mixradio", { start: true }); return "Mix Radio"; }
+    if (/(mix ?radio|микс|радио|random)/.test(text))    { dispatch("play", { query: randomMixSeed() }); return "Mix Radio"; }
 
     if (/^(?:включи|поставь|запусти|найди|знайди)\s+.+/i.test(text)) {
       const like = text.replace(/^(?:включи|поставь|запусти|найди|знайди)\s+/i, "").trim();
-      if (like) { dispatch("recommend", { like, autoplay: true }); return "Шукаю та вмикаю…"; }
+      if (like) { dispatch("play", { query: like }); return "Шукаю та вмикаю…"; }
     }
 
     const moods = [
@@ -533,26 +638,26 @@
       { re: /(енерг|drive|бадьор|рок|rock)/,  mood: "energetic" }
     ];
     const m = moods.find(m => m.re.test(text));
-    if (m) { dispatch("recommend", { mood: m.mood, autoplay: wantsPlay }); chat.lastMood = m.mood; return wantsPlay ? "Підбираю та вмикаю…" : "Підбираю під настрій"; }
+    if (m) { dispatch("play", { query: ensureMoodQuery(m.mood) }); chat.lastMood = m.mood; return wantsPlay ? "Підбираю та вмикаю…" : "Підбираю під настрій"; }
 
     const g = text.match(/жанр\s*([a-zа-яёіїє-]+)/i);
-    if (g && g[1]) { dispatch("recommend", { genre: g[1], autoplay: wantsPlay }); chat.lastGenre = g[1]; return wantsPlay ? `Жанр ${g[1]}, запускаю…` : `Жанр: ${g[1]}`; }
+    if (g && g[1]) { dispatch("play", { query: ensureGenreQuery(g[1]) }); chat.lastGenre = g[1]; return wantsPlay ? `Жанр ${g[1]}, запускаю…` : `Жанр: ${g[1]}`; }
 
     if (/из (этого|того) списка|из предложенного|любой из списка/.test(text)) {
       if (chat.lastIds.length) { dispatch("play", { id: chat.lastIds[0] }); return "Запускаю из последнего списка"; }
-      dispatch("mixradio", { start: true }); return "Включаю из своих рекомендаций";
+      dispatch("play", { query: randomMixSeed() }); return "Включаю из своих рекомендаций";
     }
 
-    return "Я здесь. Могу переключать вид, управлять треком и подбирать музыку по настроению.";
+    return "Я тут. Могу переключать вид, управлять треком и подбирать музыку по настроению.";
   }
 
-  // Mic
+  // ─── Mic ─────────────────────────────────────────────────────────────
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (btnMic && SR) {
     btnMic.addEventListener("click", () => {
       try {
         const rec = new SR();
-        rec.lang = (navigator.language || "ru-RU");
+        rec.lang = codeToBCP47(state.langPref); // распознаём на зафиксированном языке
         rec.interimResults = false; rec.maxAlternatives = 1;
         btnMic.classList.add("is-on");
         rec.onresult = ev => {
@@ -568,7 +673,7 @@
     });
   }
 
-  // wiring
+  // ─── wiring ──────────────────────────────────────────────────────────
   root.querySelector(".assistant__toggle").addEventListener("click", () => { panel.hidden = !panel.hidden; });
   btnClose.addEventListener("click", () => { panel.hidden = true; });
   btnGear.addEventListener("click", () => {

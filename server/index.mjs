@@ -1,10 +1,6 @@
-// server/index.mjs — server-v4.3.1-2025-09-10
-// Focus: стабильный интент + фиксация "зацикливания одного ролика" + embeddable-фильтр + missing ytSearchMany.
-// Изменения этого релиза:
-//  - ДОБАВЛЕНО: ytSearchMany (YouTube Data API, videoEmbeddable=true).
-//  - ПОЧИНЕНО: took теперь считает локальным таймером (без req.startTime).
-//  - ДОБАВЛЕНО: фильтрация "встраиваемости" ID (через oEmbed), снижает Playback ID errors.
-//  - SYSTEM: одна строка о языке ответа пользователя.
+// server/index.mjs — server-v4.3.3-2025-09-10
+// Focus: стабильный интент, FORCED-NEXT, embeddable-фильтр, рандом MixRadio, стабильный язык,
+// без автостарта при пустых действиях, YouTube medium-duration, кеш-эндпоинты.
 
 import 'dotenv/config';
 import express from 'express';
@@ -15,7 +11,7 @@ import { searchIdsFallback, filterEmbeddable } from './search-fallback.mjs';
 
 const app = express();
 const PORT = Number(process.env.PORT || 8787);
-const VERSION = 'server-v4.3.1-2025-09-10';
+const VERSION = 'server-v4.3.3-2025-09-10';
 const DEBUG_INTENT = String(process.env.DEBUG_INTENT || '') === '1';
 
 // === LLM / YT конфиг ===
@@ -28,7 +24,8 @@ const YT_API_KEY      = process.env.YT_API_KEY     || ''; // опциональ�
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
-// ─── Server TTS (Piper) ──────────────────────────────────────────────────────
+
+// ─── Server TTS (Piper) ────────────────────────────────────────────────
 registerTTS(app);
 
 app.get('/api/health', (_req, res) => {
@@ -125,6 +122,22 @@ function normalizeAggressive(s='') {
   return t.toLowerCase();
 }
 
+// язык для reply «Next track.»
+function langOf(s='') {
+  if (/[ґєіїҐЄІЇ]/.test(s)) return 'uk';
+  if (/[\u0400-\u04FF]/.test(s)) return 'ru';
+  return 'en';
+}
+function replyNextByLang(s='') {
+  const l = langOf(s);
+  return l === 'uk' ? 'Наступний трек.' : l === 'ru' ? 'Следующий трек.' : 'Next track.';
+}
+// детектор жёсткого «Next»
+function isNextIntent(s='') {
+  const t = String(s||'').toLowerCase();
+  return /\b(следующ(ую|ий|ая)|друг(ую|ой)|ин(ую|ой)|нов(ую|ый)|another|next|skip|скип)\b/.test(t);
+}
+
 /* ---------------- Вызов LLM ---------------- */
 async function askLLM(messages) {
   const url = `${OPENAI_BASE_URL}/chat/completions`;
@@ -204,7 +217,7 @@ function inferActionsFromUser(text='') {
   // Транспорт
   if (/(пауза|стоп|останов|pause)/.test(t)) actions.push({ type:'player', action:'pause' });
   if (/выключ(и|ай)/.test(t)) actions.push({ type:'player', action:'stop' });
-  if (/следующ|next/.test(t)) actions.push({ type:'player', action:'next' });
+  if (/(следующ|друг(ую|ой)|ин(ую|ой)|нов(ую|ый)|another|next|skip|скип)/.test(t)) actions.push({ type:'player', action:'next' });
   if (/предыдущ|предыд|prev/.test(t)) actions.push({ type:'player', action:'prev' });
 
   // Громкость
@@ -310,7 +323,7 @@ async function ytSearchFirst(q='') {
   u.searchParams.set('type', 'video');
   u.searchParams.set('maxResults', '1');
   u.searchParams.set('order', 'relevance');
-  u.searchParams.set('videoDuration', 'medium');
+  u.searchParams.set('videoDuration', 'medium');        // меньше часовых
   u.searchParams.set('videoEmbeddable', 'true');
   u.searchParams.set('q', q);
   u.searchParams.set('key', YT_API_KEY);
@@ -322,7 +335,7 @@ async function ytSearchFirst(q='') {
   return (id && /^[\w-]{11}$/.test(id)) ? id : '';
 }
 
-// Новый: множественный поиск ID (до 50) с videoEmbeddable=true
+// Новый: множественный поиск ID (до 50) с videoEmbeddable=true и videoDuration=medium
 async function ytSearchMany(q = '', max = 25) {
   if (!YT_API_KEY || !q) return [];
   const limit = Math.max(1, Math.min(50, Number(max || 25)));
@@ -331,6 +344,7 @@ async function ytSearchMany(q = '', max = 25) {
   u.searchParams.set('type', 'video');
   u.searchParams.set('maxResults', String(limit));
   u.searchParams.set('order', 'relevance');
+  u.searchParams.set('videoDuration', 'medium');        // не берём двухчасовые «сборники»
   u.searchParams.set('videoEmbeddable', 'true');
   u.searchParams.set('q', q);
   u.searchParams.set('key', YT_API_KEY);
@@ -354,13 +368,12 @@ function shouldResolveToId(query='') {
   if (q.includes(' - ')) return true; // artist - song
   if (/\b(official|audio|video|lyrics|remaster(ed)?)\b/.test(q)) return true;
   if (/["«»“”„‟].+["«»“”„‟]/.test(query)) return true; // кавычки вокруг названия
-  if (/\b\d{4}\b/.test(q)) return true; // часто уточняют год конкретного трека
-  // короткая "queen" / "madonna" → НЕ резолвим в ID (это плейлист)
-  if (q.split(/\s+/).length <= 2) return false;
+  if (/\b\d{4}\b/.test(q)) return true; // часто уточняют год
+  if (q.split(/\s+/).length <= 2) return false; // короткая "queen" → плейлист
   return false;
 }
 
-/* ---------------- /api/yt/search with cache & fallback ------------------ */
+/* ---------------- Cache helpers ------------------ */
 const __searchCache = new Map(); // key → { ids, exp }
 const SEARCH_TTL_MS = 24 * 60 * 60 * 1000; // 24h
 
@@ -373,6 +386,16 @@ function cacheGet(k) {
 }
 function cacheSet(k, ids) { __searchCache.set(k, { ids, exp: Date.now() + SEARCH_TTL_MS }); }
 
+app.get('/api/yt/cache/clear', (_req, res) => {
+  const before = __searchCache.size;
+  __searchCache.clear();
+  res.json({ ok: true, before, after: __searchCache.size });
+});
+app.get('/api/yt/cache/stats', (_req, res) => {
+  res.json({ ok: true, size: __searchCache.size, ttl_ms: SEARCH_TTL_MS });
+});
+
+/* ---------------- /api/yt/search ------------------ */
 app.post('/api/yt/search', async (req, res) => {
   const t0 = Date.now();
   try {
@@ -385,31 +408,23 @@ app.post('/api/yt/search', async (req, res) => {
     if (cached) return res.json({ ids: cached, q, cached: true, took: Date.now() - t0 });
 
     let ids = [];
-    let usedFallback = false;
-
-    // 1) Основной путь — YouTube Data API (если есть ключ)
     if (typeof YT_API_KEY === 'string' && YT_API_KEY) {
       ids = await ytSearchMany(q, max);
     }
 
-    // 2) Fallback при отсутствии ключа/недостатке результатов
     if (!ids || ids.length < Math.max(3, Math.floor(max / 4))) {
       try {
         const extra = await searchIdsFallback(q, { max });
         const merged = Array.from(new Set([...(ids || []), ...extra]));
         ids = merged.slice(0, max);
-        usedFallback = true;
       } catch (e) {
         console.warn('[yt.search] fallback failed', e?.message || e);
       }
     }
 
-    // 3) Доп. фильтр встраиваемости (подстраховка даже после API)
     try {
       ids = await filterEmbeddable(ids, { max });
-    } catch {
-      // если что-то пошло не так — просто отдадим как есть
-    }
+    } catch {}
 
     cacheSet(key, ids);
     return res.json({ ids, q, took: Date.now() - t0 });
@@ -419,6 +434,24 @@ app.post('/api/yt/search', async (req, res) => {
   }
 });
 
+/* ---------------- Микс-сиды (рандом) ---------------- */
+const MIX_SEEDS = [
+  'lofi hip hop radio',
+  'classic rock hits',
+  'best jazz music relaxing',
+  'indie rock playlist',
+  'hip hop playlist',
+  'edm house techno mix',
+  'ambient music long playlist',
+  'pop hits playlist',
+  'latin hits playlist',
+  'rnb soul classics playlist',
+  'best reggae mix'
+];
+function randomMixSeed() {
+  return MIX_SEEDS[(Math.random()*MIX_SEEDS.length)|0];
+}
+
 /* ---------------- /api/chat ---------------- */
 app.post('/api/chat', async (req, res) => {
   const t0 = Date.now();
@@ -427,6 +460,18 @@ app.post('/api/chat', async (req, res) => {
     const userText = String(req.body?.message || '').trim();
     const clientHist = Array.isArray(req.body?.history) ? req.body.history : [];
     if (!userText) return res.json({ reply: 'Скажи, что включить.', actions: [] });
+
+    // Языковая подсказка от клиента (RU/UK/EN)
+    const langHint = String(req.body?.langHint || '').toLowerCase();
+    const SYS_LANG = (langHint === 'ru')
+      ? 'Отвечай только по-русски.'
+      : (langHint === 'uk')
+        ? 'Відповідай тільки українською.'
+        : (langHint === 'en')
+          ? 'Answer only in English.'
+          : '';
+
+    const forcedNext = isNextIntent(userText); // <── ЖЁСТКИЙ NEXT
 
     const srvHist = memory.get(sid) || [];
     const combined = [...srvHist, ...clientHist.slice(-8)];
@@ -440,6 +485,8 @@ app.post('/api/chat', async (req, res) => {
 
     const messages = [
       { role: 'system', content: SYSTEM },
+      { role: 'system', content: 'Не используй китайский/японский/корейский. Отвечай только на RU/UK/EN.' },
+      ...(SYS_LANG ? [{ role: 'system', content: SYS_LANG }] : []),
       ...FEWSHOTS,
       ...dedup.slice(-MAX_SRV_HISTORY),
       { role: 'user', content: userText }
@@ -484,7 +531,9 @@ app.post('/api/chat', async (req, res) => {
     const ensureLikeQuery = (like) => {
       const s = (like||'').trim();
       if (!s) return '';
-      return s; // дальше решим: плейлист артиста или одиночный трек
+      const words = s.split(/\s+/).filter(Boolean);
+      if (words.length <= 2 && !/[-"«»“”„‟]/.test(s)) return `${s} greatest hits playlist`;
+      return s;
     };
     const ensureGenreQuery = (genre) => {
       const g = normalizeAggressive(genre);
@@ -512,6 +561,10 @@ app.post('/api/chat', async (req, res) => {
     };
 
     for (const a of actions) {
+      if (a?.type === 'mixradio') {
+        out.push({ type:'play', id:'', query: randomMixSeed() });
+        continue;
+      }
       if (a?.type === 'recommend' && a.like && a.autoplay) {
         const like = ensureLikeQuery(a.like);
         out.push({ type:'play', id:'', query: like });
@@ -531,7 +584,6 @@ app.post('/api/chat', async (req, res) => {
     const enriched = [];
     for (const a of out) {
       if (a?.type === 'play' && !a.id && a.query && YT_API_KEY) {
-        // Только для явных "одиночных треков" пытаемся получить ID
         if (shouldResolveToId(a.query)) {
           const q = /official|audio|video|lyrics/i.test(a.query) ? a.query : `${a.query} official audio`;
           const id = await ytSearchFirst(q);
@@ -543,8 +595,15 @@ app.post('/api/chat', async (req, res) => {
         enriched.push(a);
       }
     }
-    const finalActions = enriched.length ? enriched : [{ type:'mixradio' }];
 
+    // ВАЖНО: если пользователь сказал «следующую/another/skip» — принудительно Next
+    let finalActions = enriched;
+    if (forcedNext) {
+      finalActions = [{ type:'player', action:'next' }];
+      if (!data.reply) data.reply = replyNextByLang(userText);
+    }
+
+    // БЕЗ автостарта при пустых действиях
     pushHistory(sid, 'user', userText);
     pushHistory(sid, 'assistant', JSON.stringify({ reply: data.reply || replyForActions(finalActions), actions: finalActions }));
 
@@ -560,3 +619,4 @@ app.listen(PORT, () => {
   console.log(`AI server on http://localhost:${PORT}`);
   console.log(`Using model="${OPENAI_MODEL}" via ${OPENAI_BASE_URL}  (${VERSION})`);
 });
+
