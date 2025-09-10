@@ -205,6 +205,15 @@ async function loadReviews() {
 
   try {
     const res = await fetch('https://sound-wave.b.goit.study/api/feedbacks');
+    const ct = res.headers.get('content-type') || '';
+    if (!res.ok || !ct.includes('audio')) {
+    // попробуем показать причину
+     let msg = 'TTS server error';
+     try { msg = (await res.clone().json()).error || msg; } catch {}
+     console.warn('[tts] non-audio response', msg);
+     throw new Error(msg);
+    }
+
     const json = await res.json();
     const feedbacks = (json?.data || []).slice(0, 10); // РОВНО 10
 

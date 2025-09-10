@@ -556,9 +556,11 @@ export function createMiniPlayer() {
               autoNext();
             }
           },
+          // ⬇⬇⬇ ИЗМЕНЕНО: обработка ошибок с мгновенным skip для embed-кодов 2/5/100/101/150
           onError: (e) => {
-            emit("error", { code: e?.data || 'unknown' });
-            dbg('YT error', e?.data);
+            const code = (e && (e.data ?? e.code)) ?? 0;
+            emit("error", { code });
+            dbg('YT error', code, e);
             uiPlayIcon(false);
             setBubblePulse(false);
             clearTimer();
@@ -566,8 +568,21 @@ export function createMiniPlayer() {
             clearSearchWatch();
             clearStuckGuard();
             clearAutoplayTimer();
+
+            // Эти коды почти всегда означают "невстраиваемо/заблокировано"
+            if ([2, 5, 100, 101, 150].includes(code)) {
+              try {
+                if (searchMode) { yt?.nextVideo?.(); } else { next(); }
+              } catch {
+                skipWithDelay(0);
+              }
+              return;
+            }
+
+            // Прочие ошибки — мягкий skip с небольшой задержкой
             skipWithDelay(1200);
           }
+          // ▲▲▲ КОНЕЦ ИЗМЕНЕНИЙ
         }
       };
       // Добавляем videoId ТОЛЬКО если он валидный

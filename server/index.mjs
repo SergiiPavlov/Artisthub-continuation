@@ -1,18 +1,21 @@
-// server/index.mjs — server-v4.2.5-2025-09-09
-// Focus: стабильный интент + фиксация "зацикливания одного ролика".
-// Изменения:
-//  - Не конвертируем плейлистовые запросы (артист/жанр/муд) в один ID.
-//  - В ID переводим только явно "одиночные" треки (artist - song, "…", official audio/video).
-//  - Оставлен /api/yt/search (опционально).
+// server/index.mjs — server-v4.3.1-2025-09-10
+// Focus: стабильный интент + фиксация "зацикливания одного ролика" + embeddable-фильтр + missing ytSearchMany.
+// Изменения этого релиза:
+//  - ДОБАВЛЕНО: ytSearchMany (YouTube Data API, videoEmbeddable=true).
+//  - ПОЧИНЕНО: took теперь считает локальным таймером (без req.startTime).
+//  - ДОБАВЛЕНО: фильтрация "встраиваемости" ID (через oEmbed), снижает Playback ID errors.
+//  - SYSTEM: одна строка о языке ответа пользователя.
 
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
+import { registerTTS } from './tts.mjs';
+import { searchIdsFallback, filterEmbeddable } from './search-fallback.mjs';
 
 const app = express();
 const PORT = Number(process.env.PORT || 8787);
-const VERSION = 'server-v4.2.5-2025-09-09';
+const VERSION = 'server-v4.3.1-2025-09-10';
 const DEBUG_INTENT = String(process.env.DEBUG_INTENT || '') === '1';
 
 // === LLM / YT конфиг ===
@@ -25,6 +28,8 @@ const YT_API_KEY      = process.env.YT_API_KEY     || ''; // опциональ�
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
+// ─── Server TTS (Piper) ──────────────────────────────────────────────────────
+registerTTS(app);
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, version: VERSION, model: OPENAI_MODEL, base: OPENAI_BASE_URL });
@@ -80,8 +85,8 @@ const SYSTEM = `Ты — ассистент музыкальной витрин�
 - «под настроение» → recommend.mood (+autoplay=true, если это просьба включить).
 - «сверни/разверни плеер» → {"type":"ui","action":"minimize|expand"}.
 - НЕ выдумывай YouTube ID. Если не уверен — ставь только "query", без "id".
+- Отвечай пользователю на его языке (русский/українська/English) в поле "reply".
 - Никогда не добавляй текст вне JSON. Ответ — только JSON, без пояснений и без тройных бэктиков.
-- Если не уверен, верни actions:[] и короткий reply.
 `;
 
 const FEWSHOTS = [
@@ -306,6 +311,7 @@ async function ytSearchFirst(q='') {
   u.searchParams.set('maxResults', '1');
   u.searchParams.set('order', 'relevance');
   u.searchParams.set('videoDuration', 'medium');
+  u.searchParams.set('videoEmbeddable', 'true');
   u.searchParams.set('q', q);
   u.searchParams.set('key', YT_API_KEY);
 
@@ -314,6 +320,32 @@ async function ytSearchFirst(q='') {
   const j = await r.json().catch(()=> ({}));
   const id = j?.items?.[0]?.id?.videoId;
   return (id && /^[\w-]{11}$/.test(id)) ? id : '';
+}
+
+// Новый: множественный поиск ID (до 50) с videoEmbeddable=true
+async function ytSearchMany(q = '', max = 25) {
+  if (!YT_API_KEY || !q) return [];
+  const limit = Math.max(1, Math.min(50, Number(max || 25)));
+  const u = new URL('https://www.googleapis.com/youtube/v3/search');
+  u.searchParams.set('part', 'id');
+  u.searchParams.set('type', 'video');
+  u.searchParams.set('maxResults', String(limit));
+  u.searchParams.set('order', 'relevance');
+  u.searchParams.set('videoEmbeddable', 'true');
+  u.searchParams.set('q', q);
+  u.searchParams.set('key', YT_API_KEY);
+
+  const r = await fetch(String(u)).catch(() => null);
+  if (!r || !r.ok) return [];
+  const j = await r.json().catch(() => ({}));
+  const items = Array.isArray(j?.items) ? j.items : [];
+  const ids = [];
+  for (const it of items) {
+    const id = it?.id?.videoId;
+    if (id && /^[A-Za-z0-9_-]{11}$/.test(id)) ids.push(id);
+  }
+  // dedup
+  return Array.from(new Set(ids)).slice(0, limit);
 }
 
 // Явный «одиночный трек»?
@@ -328,59 +360,64 @@ function shouldResolveToId(query='') {
   return false;
 }
 
-/* ---------------- (опц.) /api/yt/search для очередей ---------------- */
+/* ---------------- /api/yt/search with cache & fallback ------------------ */
+const __searchCache = new Map(); // key → { ids, exp }
+const SEARCH_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+
+function cacheKey(q, max) { return `${q}\u0001${max}`; }
+function cacheGet(k) {
+  const rec = __searchCache.get(k);
+  if (!rec) return null;
+  if (Date.now() > rec.exp) { __searchCache.delete(k); return null; }
+  return rec.ids || null;
+}
+function cacheSet(k, ids) { __searchCache.set(k, { ids, exp: Date.now() + SEARCH_TTL_MS }); }
+
 app.post('/api/yt/search', async (req, res) => {
+  const t0 = Date.now();
   try {
     const q = String(req.body?.q || '').trim();
     const max = Math.max(1, Math.min(50, Number(req.body?.max || 25)));
-    if (!q) return res.status(400).json({ ids: [], error: 'no query' });
-    if (!YT_API_KEY) return res.json({ ids: [], error: 'no YT_API_KEY' });
+    if (!q) return res.status(400).json({ ids: [], error: 'no_query' });
 
-    const ids = await ytSearchMany(q, max);
-    return res.json({ ids, q, took: Date.now() - req.startTime });
+    const key = cacheKey(q, max);
+    const cached = cacheGet(key);
+    if (cached) return res.json({ ids: cached, q, cached: true, took: Date.now() - t0 });
+
+    let ids = [];
+    let usedFallback = false;
+
+    // 1) Основной путь — YouTube Data API (если есть ключ)
+    if (typeof YT_API_KEY === 'string' && YT_API_KEY) {
+      ids = await ytSearchMany(q, max);
+    }
+
+    // 2) Fallback при отсутствии ключа/недостатке результатов
+    if (!ids || ids.length < Math.max(3, Math.floor(max / 4))) {
+      try {
+        const extra = await searchIdsFallback(q, { max });
+        const merged = Array.from(new Set([...(ids || []), ...extra]));
+        ids = merged.slice(0, max);
+        usedFallback = true;
+      } catch (e) {
+        console.warn('[yt.search] fallback failed', e?.message || e);
+      }
+    }
+
+    // 3) Доп. фильтр встраиваемости (подстраховка даже после API)
+    try {
+      ids = await filterEmbeddable(ids, { max });
+    } catch {
+      // если что-то пошло не так — просто отдадим как есть
+    }
+
+    cacheSet(key, ids);
+    return res.json({ ids, q, took: Date.now() - t0 });
   } catch (e) {
     console.error('[yt.search] error', e);
-    return res.status(500).json({ ids: [], error: 'server_error' });
+    return res.status(500).json({ ids: [], error: 'server_error', took: Date.now() - t0 });
   }
 });
-
-async function ytSearchMany(q, max = 25) {
-  if (!YT_API_KEY) return [];
-  const out = [];
-  let pageToken = '';
-  const queries = [q, `${q} official`];
-
-  for (const query of queries) {
-    pageToken = '';
-    let tries = 0;
-    while (out.length < max && tries < 4) {
-      tries++;
-      const url = new URL('https://www.googleapis.com/youtube/v3/search');
-      url.searchParams.set('part', 'id');
-      url.searchParams.set('type', 'video');
-      url.searchParams.set('maxResults', String(Math.min(50, max - out.length)));
-      url.searchParams.set('order', 'relevance');
-      url.searchParams.set('videoEmbeddable', 'true');
-      url.searchParams.set('q', query);
-      url.searchParams.set('key', YT_API_KEY);
-      if (pageToken) url.searchParams.set('pageToken', pageToken);
-
-      const r = await fetch(String(url)).catch(() => null);
-      if (!r || !r.ok) break;
-      const j = await r.json().catch(() => ({}));
-      const items = Array.isArray(j.items) ? j.items : [];
-      for (const it of items) {
-        const id = it?.id?.videoId;
-        if (id && /^[A-Za-z0-9_-]{11}$/.test(id)) out.push(id);
-        if (out.length >= max) break;
-      }
-      if (!j.nextPageToken) break;
-      pageToken = j.nextPageToken;
-    }
-    if (out.length >= Math.max(3, Math.floor(max / 2))) break;
-  }
-  return out.slice(0, max);
-}
 
 /* ---------------- /api/chat ---------------- */
 app.post('/api/chat', async (req, res) => {
@@ -506,20 +543,13 @@ app.post('/api/chat', async (req, res) => {
         enriched.push(a);
       }
     }
-    actions = enriched;
-
-    // 5) FINAL GUARD
-    if (!actions.length) {
-      actions = [{ type:'mixradio' }];
-      if (!data.reply) data.reply = 'Включаю микс-радио.';
-      if (DEBUG_INTENT) console.log('[chat:fallback:finalguard] mixradio');
-    }
+    const finalActions = enriched.length ? enriched : [{ type:'mixradio' }];
 
     pushHistory(sid, 'user', userText);
-    pushHistory(sid, 'assistant', JSON.stringify({ reply: data.reply, actions }));
+    pushHistory(sid, 'assistant', JSON.stringify({ reply: data.reply || replyForActions(finalActions), actions: finalActions }));
 
-    console.log(`[chat] ${Date.now()-t0}ms  a=${actions.length}  err=${data._error||''}`);
-    res.json({ reply: data.reply || 'Готово.', explain: data.explain || '', actions });
+    console.log(`[chat] ${Date.now()-t0}ms  a=${finalActions.length}  err=${data._error||''}`);
+    res.json({ reply: data.reply || replyForActions(finalActions) || 'Готово.', explain: data.explain || '', actions: finalActions });
   } catch (e) {
     console.error('[chat] ERROR', e);
     res.status(500).json({ reply: 'Локальный ИИ не ответил. Я переключусь на простое управление.', actions: [] });

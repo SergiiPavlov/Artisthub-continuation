@@ -1,5 +1,5 @@
 // Chat Friend + AI bridge with memory + Provider + Optional server TTS (Piper)
-// VERSION: chat.js v2.3.0 (timer-suppress + UI actions) — 2025-09-09
+// VERSION: chat.js v2.3.1 (server TTS buffered) — 2025-09-10
 (() => {
   if (window.__ASSISTANT_UI_INIT__) return;
   window.__ASSISTANT_UI_INIT__ = true;
@@ -176,18 +176,31 @@
     speak("Голос выбран");
   });
 
-  async function speakServer(text) {
+  // ─── НОВОЕ: лёгкий детект языка для Piper ───────────────────────────
+  function detectLang(text = "") {
+    const s = String(text);
+    if (/[ґєіїҐЄІЇ]/.test(s)) return "uk";
+    if (/[\u0400-\u04FF]/.test(s)) return "ru";
+    return "en";
+  }
+
+  // ─── НОВОЕ: безопасный серверный TTS (буферная отдача) ───────────────
+  async function speakServer(text, lang) {
     if (!API_BASE) throw new Error('no API');
     const r = await fetch(`${API_BASE}/api/tts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text })
+      body: JSON.stringify({ text, lang })
     });
-    if (!r.ok) throw new Error('tts unavailable');
-    const blob = await r.blob();
-    const url  = URL.createObjectURL(blob);
+    if (!r.ok) throw new Error(`tts unavailable ${r.status}`);
+    // ЖДЁМ ПОЛНЫЙ БУФЕР, а не стримим
+    const buf = await r.arrayBuffer();
+    const url = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
     const audio = new Audio(url);
-    audio.play().catch(() => {});
+    audio.preload = 'auto';
+    try { await audio.play(); } catch (e) { console.warn('[tts] play() blocked:', e); }
+    audio.onended = () => URL.revokeObjectURL(url);
+    audio.onerror = () => console.error('[tts] audio error:', audio.error);
   }
 
   function speakBrowser(text) {
@@ -208,7 +221,7 @@
 
   function speak(text) {
     const useServer = chkTTS.checked && !!API_BASE;
-    if (useServer) speakServer(text).catch(() => speakBrowser(text));
+    if (useServer) speakServer(text, detectLang(text)).catch(() => speakBrowser(text));
     else speakBrowser(text);
   }
 
@@ -569,4 +582,3 @@
     if (e.key === "Enter") { const t = inputEl.value; inputEl.value = ""; handleUserText(t); }
   });
 })();
-
