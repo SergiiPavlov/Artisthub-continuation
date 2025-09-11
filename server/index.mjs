@@ -1,7 +1,12 @@
-// server/index.mjs — server-v4.3.3-2025-09-10
-// Focus: стабильный интент, FORCED-NEXT, embeddable-фильтр, рандом MixRadio, стабильный язык,
-// без автостарта при пустых действиях, YouTube medium-duration, кеш-эндпоинты.
-
+/* =============================================================
+   FILE: server/index.mjs
+   VERSION: server-v4.5.3-2025-09-11
+   ============================================================= */
+// server/index.mjs — server-v4.5.3-2025-09-11
+// Focus: lang-lock (RU/UK/EN) + few-shots по выбранному языку,
+// enrichment recommend→play (как в 4.4.1), embeddable-фильтр,
+// MixRadio, /api/yt/search с exclude/shuffle, кеш, БЕЗ принудительного query→id.
+// Добавлено: подсказки под настроение (без autoplay), правило «не делать немедленный pause/stop при "через N"/"после текущего"»
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -11,14 +16,14 @@ import { searchIdsFallback, filterEmbeddable } from './search-fallback.mjs';
 
 const app = express();
 const PORT = Number(process.env.PORT || 8787);
-const VERSION = 'server-v4.3.3-2025-09-10';
+const VERSION = 'server-v4.5.3-2025-09-11';
 const DEBUG_INTENT = String(process.env.DEBUG_INTENT || '') === '1';
 
 // === LLM / YT конфиг ===
 const OPENAI_BASE_URL = (process.env.OPENAI_BASE_URL || 'http://127.0.0.1:1234/v1').replace(/\/+$/,'');
 const OPENAI_API_KEY  = process.env.OPENAI_API_KEY || 'lm-studio';
 const OPENAI_MODEL    = process.env.OPENAI_MODEL   || 'qwen2.5-7b-instruct';
-const YT_API_KEY      = process.env.YT_API_KEY     || ''; // опционально
+const YT_API_KEY      = process.env.YT_API_KEY     || '';
 
 // --- middleware
 app.use(cors({ origin: true, credentials: true }));
@@ -32,7 +37,7 @@ app.get('/api/health', (_req, res) => {
   res.json({ ok: true, version: VERSION, model: OPENAI_MODEL, base: OPENAI_BASE_URL });
 });
 
-/* ---------------- Память сессий (короткая) ---------------- */
+/* ---------------- Память сессий ---------------- */
 const memory = new Map(); // sid -> [{role, content}, ...]
 const MAX_SRV_HISTORY = 8;
 
@@ -41,15 +46,12 @@ function getSid(req, res) {
   if (!sid) {
     sid = Math.random().toString(36).slice(2) + Date.now().toString(36);
     res.cookie('sid', sid, {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production',
+      httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production',
       maxAge: 7*864e5
     });
   }
   return sid;
 }
-
 function pushHistory(sid, role, content) {
   const arr = memory.get(sid) || [];
   arr.push({ role, content: String(content || '') });
@@ -57,8 +59,8 @@ function pushHistory(sid, role, content) {
   memory.set(sid, arr);
 }
 
-/* ---------------- Система + few-shots (строгий JSON) ---------------- */
-const SYSTEM = `Ты — ассистент музыкальной витрины ArtistsHub.
+/* ---------------- System + Few-shots (строгий JSON) ------------------ */
+const SYSTEM_CORE = `Ты — ассистент музыкальной витрины ArtistsHub.
 Отвечай СТРОГО одним JSON-объектом:
 {
   "reply": "короткая фраза пользователю",
@@ -66,52 +68,61 @@ const SYSTEM = `Ты — ассистент музыкальной витрин�
   "actions": [
     {"type":"player","action":"play"|"pause"|"next"|"prev"|"stop"},
     {"type":"mixradio"},
-    {"type":"recommend","mood":"happy|calm|sad|energetic","genre":"рок","like":"queen bohemian rhapsody","autoplay":true},
+    {"type":"recommend","mood":"happy|calm|sad|energetic","genre":"рок","like":"queen bohemian rhapsody","autoplay":true|false},
     {"type":"volume","delta":0.1},
     {"type":"play","id":"YOUTUBE_ID_11","query":"artist - song"},
     {"type":"ui","action":"minimize"|"expand"}
   ]
 }
-
 Правила:
 - «включи <…>» → play.query или recommend.like + autoplay=true.
 - «жанр <…>» → recommend.genre (+autoplay=true, если просят включить).
-- «пауза/стоп» → player.pause/stop.
+- «пауза/стоп» → player.pause/stop. ЕСЛИ в тексте есть «через N» или «после текущего» — НЕ добавляй немедленный pause/stop в actions (клиент сам поставит таймер).
 - «следующий/предыдущий» → player.next/prev.
 - «громче/тише» → volume.delta ±0.1.
-- «под настроение» → recommend.mood (+autoplay=true, если это просьба включить).
+- «под настроение»:
+    * если без явного «включи», предложи 2–3 варианта жанров/артистов в reply (кратко), а в actions можно вернуть recommend.mood с autoplay=false;
+    * если просят включить — recommend.mood с autoplay=true.
 - «сверни/разверни плеер» → {"type":"ui","action":"minimize|expand"}.
 - НЕ выдумывай YouTube ID. Если не уверен — ставь только "query", без "id".
-- Отвечай пользователю на его языке (русский/українська/English) в поле "reply".
 - Никогда не добавляй текст вне JSON. Ответ — только JSON, без пояснений и без тройных бэктиков.
 `;
 
-const FEWSHOTS = [
-  { role: 'user', content: 'включи джаз' },
-  { role: 'assistant', content: JSON.stringify({ reply:'Включаю джаз.', actions:[{type:'recommend', genre:'джаз', autoplay:true}] }) },
-  { role: 'user', content: 'сделай паузу' },
-  { role: 'assistant', content: JSON.stringify({ reply:'Пауза.', actions:[{type:'player', action:'pause'}] }) },
-  { role: 'user', content: 'громче' },
-  { role: 'assistant', content: JSON.stringify({ reply:'Громче.', actions:[{type:'volume', delta:0.1}] }) },
-
-  { role: 'user', content: 'включи queen' },
-  { role: 'assistant', content: JSON.stringify({ reply:'Включаю Queen.', actions:[{type:'recommend', like:'queen', autoplay:true}] }) },
-  { role: 'user', content: 'что-нибудь спокойное' },
-  { role: 'assistant', content: JSON.stringify({ reply:'Ставлю спокойное.', actions:[{type:'recommend', mood:'calm', autoplay:true}] }) },
-  { role: 'user', content: 'жанр рок 80-х' },
-  { role: 'assistant', content: JSON.stringify({ reply:'Рок 80-х.', actions:[{type:'recommend', genre:'рок', decade:'80s', autoplay:true}] }) },
-  { role: 'user', content: 'похожее на bohemian rhapsody' },
-  { role: 'assistant', content: JSON.stringify({ reply:'Похоже на Bohemian Rhapsody.', actions:[{type:'recommend', like:'bohemian rhapsody', autoplay:true}] }) },
-  { role: 'user', content: 'сверни плеер' },
-  { role: 'assistant', content: JSON.stringify({ reply:'Сворачиваю.', actions:[{type:'ui', action:'minimize'}] }) },
-  { role: 'user', content: 'разверни' },
-  { role: 'assistant', content: JSON.stringify({ reply:'Открываю плеер.', actions:[{type:'ui', action:'expand'}] }) },
-];
+const FEWSHOTS = {
+  ru: [
+    { role:'user', content:'включи джаз' },
+    { role:'assistant', content: JSON.stringify({ reply:'Включаю джаз.', actions:[{type:'recommend', genre:'джаз', autoplay:true}] }) },
+    { role:'user', content:'сделай паузу' },
+    { role:'assistant', content: JSON.stringify({ reply:'Пауза.', actions:[{type:'player', action:'pause'}] }) },
+    { role:'user', content:'громче' },
+    { role:'assistant', content: JSON.stringify({ reply:'Громче.', actions:[{type:'volume', delta:0.1}] }) },
+    { role:'user', content:'подбери спокойную музыку' },
+    { role:'assistant', content: JSON.stringify({ reply:'Могу ло-фай, акустика или chill-джаз — что включить?', actions:[{type:'recommend', mood:'calm', autoplay:false}] }) }
+  ],
+  en: [
+    { role:'user', content:'play some jazz' },
+    { role:'assistant', content: JSON.stringify({ reply:'Playing jazz.', actions:[{type:'recommend', genre:'jazz', autoplay:true}] }) },
+    { role:'user', content:'pause it' },
+    { role:'assistant', content: JSON.stringify({ reply:'Paused.', actions:[{type:'player', action:'pause'}] }) },
+    { role:'user', content:'louder' },
+    { role:'assistant', content: JSON.stringify({ reply:'Louder.', actions:[{type:'volume', delta:0.1}] }) },
+    { role:'user', content:'suggest calm music' },
+    { role:'assistant', content: JSON.stringify({ reply:'Lo-fi, acoustic, or chill jazz — pick one?', actions:[{type:'recommend', mood:'calm', autoplay:false}] }) }
+  ],
+  uk: [
+    { role:'user', content:'увімкни джаз' },
+    { role:'assistant', content: JSON.stringify({ reply:'Вмикаю джаз.', actions:[{type:'recommend', genre:'джаз', autoplay:true}] }) },
+    { role:'user', content:'пауза' },
+    { role:'assistant', content: JSON.stringify({ reply:'Пауза.', actions:[{type:'player', action:'pause'}] }) },
+    { role:'user', content:'гучніше' },
+    { role:'assistant', content: JSON.stringify({ reply:'Гучніше.', actions:[{type:'volume', delta:0.1}] }) },
+    { role:'user', content:'музика під спокійний настрій' },
+    { role:'assistant', content: JSON.stringify({ reply:'Можу lo-fi, акустика або chill-джаз — що вмикати?', actions:[{type:'recommend', mood:'calm', autoplay:false}] }) }
+  ],
+};
 
 /* ---------------- Утилиты ---------------- */
-function capitalize(s='') {
-  return s ? s[0].toUpperCase() + s.slice(1) : s;
-}
+function capitalize(s='') { return s ? s[0].toUpperCase() + s.slice(1) : s; }
 function normalizeAggressive(s='') {
   let t = String(s || '');
   try { t = t.normalize('NFC'); } catch {}
@@ -120,22 +131,6 @@ function normalizeAggressive(s='') {
   t = t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').normalize('NFC');
   t = t.replace(/\u0451/g, '\u0435').replace(/\u0401/g, '\u0415');
   return t.toLowerCase();
-}
-
-// язык для reply «Next track.»
-function langOf(s='') {
-  if (/[ґєіїҐЄІЇ]/.test(s)) return 'uk';
-  if (/[\u0400-\u04FF]/.test(s)) return 'ru';
-  return 'en';
-}
-function replyNextByLang(s='') {
-  const l = langOf(s);
-  return l === 'uk' ? 'Наступний трек.' : l === 'ru' ? 'Следующий трек.' : 'Next track.';
-}
-// детектор жёсткого «Next»
-function isNextIntent(s='') {
-  const t = String(s||'').toLowerCase();
-  return /\b(следующ(ую|ий|ая)|друг(ую|ой)|ин(ую|ой)|нов(ую|ый)|another|next|skip|скип)\b/.test(t);
 }
 
 /* ---------------- Вызов LLM ---------------- */
@@ -215,8 +210,12 @@ function inferActionsFromUser(text='') {
   if (DEBUG_INTENT) console.log('[intent:text]', t);
 
   // Транспорт
-  if (/(пауза|стоп|останов|pause)/.test(t)) actions.push({ type:'player', action:'pause' });
-  if (/выключ(и|ай)/.test(t)) actions.push({ type:'player', action:'stop' });
+  if (/(пауза|стоп|останов|pause)/.test(t) && !/(через\s+\d+|после\s+(этой|текущей)|after\s+(this|current))/.test(t)) {
+    // немедленно — только если нет отложенной формы
+    if (/пауза|pause/.test(t)) actions.push({ type:'player', action:'pause' });
+    else actions.push({ type:'player', action:'stop' });
+  }
+  if (/выключ(и|ай)/.test(t) && !/(через\s+\d+|после\s+(этой|текущей)|after\s+(this|current))/.test(t)) actions.push({ type:'player', action:'stop' });
   if (/(следующ|друг(ую|ой)|ин(ую|ой)|нов(ую|ый)|another|next|skip|скип)/.test(t)) actions.push({ type:'player', action:'next' });
   if (/предыдущ|предыд|prev/.test(t)) actions.push({ type:'player', action:'prev' });
 
@@ -292,7 +291,6 @@ function lastChanceActions(text='') {
   }
   return [];
 }
-
 function replyForActions(actions=[]) {
   if (!actions.length) return '';
   const a = actions[0];
@@ -316,18 +314,17 @@ function replyForActions(actions=[]) {
 }
 
 /* ---------------- YouTube helpers ---------------- */
-async function ytSearchFirst(q='') {
+async function ytSearchFirst(q='') { // для совместимости, по умолчанию не используется
   if (!YT_API_KEY || !q) return '';
   const u = new URL('https://www.googleapis.com/youtube/v3/search');
   u.searchParams.set('part', 'snippet');
   u.searchParams.set('type', 'video');
   u.searchParams.set('maxResults', '1');
   u.searchParams.set('order', 'relevance');
-  u.searchParams.set('videoDuration', 'medium');        // меньше часовых
+  u.searchParams.set('videoDuration', 'medium');
   u.searchParams.set('videoEmbeddable', 'true');
   u.searchParams.set('q', q);
   u.searchParams.set('key', YT_API_KEY);
-
   const r = await fetch(String(u)).catch(()=> null);
   if (!r || !r.ok) return '';
   const j = await r.json().catch(()=> ({}));
@@ -335,7 +332,6 @@ async function ytSearchFirst(q='') {
   return (id && /^[\w-]{11}$/.test(id)) ? id : '';
 }
 
-// Новый: множественный поиск ID (до 50) с videoEmbeddable=true и videoDuration=medium
 async function ytSearchMany(q = '', max = 25) {
   if (!YT_API_KEY || !q) return [];
   const limit = Math.max(1, Math.min(50, Number(max || 25)));
@@ -344,11 +340,10 @@ async function ytSearchMany(q = '', max = 25) {
   u.searchParams.set('type', 'video');
   u.searchParams.set('maxResults', String(limit));
   u.searchParams.set('order', 'relevance');
-  u.searchParams.set('videoDuration', 'medium');        // не берём двухчасовые «сборники»
+  u.searchParams.set('videoDuration', 'medium');
   u.searchParams.set('videoEmbeddable', 'true');
   u.searchParams.set('q', q);
   u.searchParams.set('key', YT_API_KEY);
-
   const r = await fetch(String(u)).catch(() => null);
   if (!r || !r.ok) return [];
   const j = await r.json().catch(() => ({}));
@@ -358,25 +353,12 @@ async function ytSearchMany(q = '', max = 25) {
     const id = it?.id?.videoId;
     if (id && /^[A-Za-z0-9_-]{11}$/.test(id)) ids.push(id);
   }
-  // dedup
   return Array.from(new Set(ids)).slice(0, limit);
-}
-
-// Явный «одиночный трек»?
-function shouldResolveToId(query='') {
-  const q = normalizeAggressive(query);
-  if (q.includes(' - ')) return true; // artist - song
-  if (/\b(official|audio|video|lyrics|remaster(ed)?)\b/.test(q)) return true;
-  if (/["«»“”„‟].+["«»“”„‟]/.test(query)) return true; // кавычки вокруг названия
-  if (/\b\d{4}\b/.test(q)) return true; // часто уточняют год
-  if (q.split(/\s+/).length <= 2) return false; // короткая "queen" → плейлист
-  return false;
 }
 
 /* ---------------- Cache helpers ------------------ */
 const __searchCache = new Map(); // key → { ids, exp }
 const SEARCH_TTL_MS = 24 * 60 * 60 * 1000; // 24h
-
 function cacheKey(q, max) { return `${q}\u0001${max}`; }
 function cacheGet(k) {
   const rec = __searchCache.get(k);
@@ -401,33 +383,42 @@ app.post('/api/yt/search', async (req, res) => {
   try {
     const q = String(req.body?.q || '').trim();
     const max = Math.max(1, Math.min(50, Number(req.body?.max || 25)));
+    const exclude = Array.isArray(req.body?.exclude) ? req.body.exclude.filter(id => /^[A-Za-z0-9_-]{11}$/.test(id)) : [];
+    const shuffle = !!req.body?.shuffle;
     if (!q) return res.status(400).json({ ids: [], error: 'no_query' });
 
     const key = cacheKey(q, max);
     const cached = cacheGet(key);
-    if (cached) return res.json({ ids: cached, q, cached: true, took: Date.now() - t0 });
+    let ids = cached ? [...cached] : null;
 
-    let ids = [];
-    if (typeof YT_API_KEY === 'string' && YT_API_KEY) {
-      ids = await ytSearchMany(q, max);
+    if (!ids) {
+      ids = [];
+      if (typeof YT_API_KEY === 'string' && YT_API_KEY) {
+        ids = await ytSearchMany(q, max);
+      }
+      if (!ids || ids.length < Math.max(3, Math.floor(max / 4))) {
+        try {
+          const extra = await searchIdsFallback(q, { max });
+          const merged = Array.from(new Set([...(ids || []), ...extra]));
+          ids = merged.slice(0, max);
+        } catch (e) {
+          console.warn('[yt.search] fallback failed', e?.message || e);
+        }
+      }
+      try { ids = await filterEmbeddable(ids, { max }); } catch {}
+      cacheSet(key, ids);
     }
 
-    if (!ids || ids.length < Math.max(3, Math.floor(max / 4))) {
-      try {
-        const extra = await searchIdsFallback(q, { max });
-        const merged = Array.from(new Set([...(ids || []), ...extra]));
-        ids = merged.slice(0, max);
-      } catch (e) {
-        console.warn('[yt.search] fallback failed', e?.message || e);
+    let out = Array.isArray(ids) ? ids.filter(id => !exclude.includes(id)) : [];
+    if (shuffle && out.length > 1) {
+      for (let i = out.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [out[i], out[j]] = [out[j], out[i]];
       }
     }
+    out = out.slice(0, max);
 
-    try {
-      ids = await filterEmbeddable(ids, { max });
-    } catch {}
-
-    cacheSet(key, ids);
-    return res.json({ ids, q, took: Date.now() - t0 });
+    return res.json({ ids: out, q, took: Date.now() - t0, cached: !!cached, excluded: exclude.length });
   } catch (e) {
     console.error('[yt.search] error', e);
     return res.status(500).json({ ids: [], error: 'server_error', took: Date.now() - t0 });
@@ -436,21 +427,11 @@ app.post('/api/yt/search', async (req, res) => {
 
 /* ---------------- Микс-сиды (рандом) ---------------- */
 const MIX_SEEDS = [
-  'lofi hip hop radio',
-  'classic rock hits',
-  'best jazz music relaxing',
-  'indie rock playlist',
-  'hip hop playlist',
-  'edm house techno mix',
-  'ambient music long playlist',
-  'pop hits playlist',
-  'latin hits playlist',
-  'rnb soul classics playlist',
-  'best reggae mix'
+  'lofi hip hop radio','classic rock hits','best jazz music relaxing','indie rock playlist','hip hop playlist',
+  'edm house techno mix','ambient music long playlist','pop hits playlist','latin hits playlist',
+  'rnb soul classics playlist','best reggae mix'
 ];
-function randomMixSeed() {
-  return MIX_SEEDS[(Math.random()*MIX_SEEDS.length)|0];
-}
+function randomMixSeed() { return MIX_SEEDS[(Math.random()*MIX_SEEDS.length)|0]; }
 
 /* ---------------- /api/chat ---------------- */
 app.post('/api/chat', async (req, res) => {
@@ -461,33 +442,29 @@ app.post('/api/chat', async (req, res) => {
     const clientHist = Array.isArray(req.body?.history) ? req.body.history : [];
     if (!userText) return res.json({ reply: 'Скажи, что включить.', actions: [] });
 
-    // Языковая подсказка от клиента (RU/UK/EN)
+    // Жёсткая фиксация языка от клиента (RU/UK/EN)
     const langHint = String(req.body?.langHint || '').toLowerCase();
-    const SYS_LANG = (langHint === 'ru')
-      ? 'Отвечай только по-русски.'
-      : (langHint === 'uk')
-        ? 'Відповідай тільки українською.'
-        : (langHint === 'en')
-          ? 'Answer only in English.'
-          : '';
-
-    const forcedNext = isNextIntent(userText); // <── ЖЁСТКИЙ NEXT
+    const SYS_LANG =
+      langHint === 'ru' ? 'Отвечай только по-русски. Не меняй язык при любых обстоятельствах.'
+      : langHint === 'uk' ? 'Відповідай тільки українською. Не змінюй мову за жодних обставин.'
+      : langHint === 'en' ? 'Answer only in English. Do not switch languages under any circumstances.'
+      : 'Answer only in English. Do not switch languages under any circumstances.';
 
     const srvHist = memory.get(sid) || [];
     const combined = [...srvHist, ...clientHist.slice(-8)];
-    const dedup = [];
-    const seen = new Set();
+    const dedup = []; const seen = new Set();
     for (const m of combined) {
       const rec = { role: String(m.role||''), content: String(m.content||'') };
       const k = JSON.stringify(rec);
       if (!seen.has(k)) { seen.add(k); dedup.push(rec); }
     }
 
+    const shots = FEWSHOTS[langHint] || FEWSHOTS.en;
     const messages = [
-      { role: 'system', content: SYSTEM },
+      { role: 'system', content: SYSTEM_CORE },
       { role: 'system', content: 'Не используй китайский/японский/корейский. Отвечай только на RU/UK/EN.' },
-      ...(SYS_LANG ? [{ role: 'system', content: SYS_LANG }] : []),
-      ...FEWSHOTS,
+      { role: 'system', content: SYS_LANG },
+      ...shots,
       ...dedup.slice(-MAX_SRV_HISTORY),
       { role: 'user', content: userText }
     ];
@@ -495,7 +472,7 @@ app.post('/api/chat', async (req, res) => {
     // 1) ответ модели
     let data = await askLLM(messages);
 
-    // 2) эвристика
+    // 2) эвристика, если пусто
     if (!Array.isArray(data.actions) || data.actions.length === 0) {
       const inferred = inferActionsFromUser(userText);
       if (inferred.length) {
@@ -514,8 +491,8 @@ app.post('/api/chat', async (req, res) => {
       }
     }
 
-    // 4) enrichment
-    let actions = Array.isArray(data.actions) ? data.actions : [];
+    // 4) enrichment recommend→play (как в v4.4.1), БЕЗ принудительного query→id
+    const actions = Array.isArray(data.actions) ? data.actions : [];
     const out = [];
 
     const ensureMoodQuery = (mood) => {
@@ -529,8 +506,7 @@ app.post('/api/chat', async (req, res) => {
       return map.get(mm) || 'music playlist';
     };
     const ensureLikeQuery = (like) => {
-      const s = (like||'').trim();
-      if (!s) return '';
+      const s = (like||'').trim(); if (!s) return '';
       const words = s.split(/\s+/).filter(Boolean);
       if (words.length <= 2 && !/[-"«»“”„‟]/.test(s)) return `${s} greatest hits playlist`;
       return s;
@@ -581,34 +557,12 @@ app.post('/api/chat', async (req, res) => {
       out.push(a);
     }
 
-    const enriched = [];
-    for (const a of out) {
-      if (a?.type === 'play' && !a.id && a.query && YT_API_KEY) {
-        if (shouldResolveToId(a.query)) {
-          const q = /official|audio|video|lyrics/i.test(a.query) ? a.query : `${a.query} official audio`;
-          const id = await ytSearchFirst(q);
-          enriched.push(id ? { ...a, id } : a);
-        } else {
-          enriched.push(a);
-        }
-      } else {
-        enriched.push(a);
-      }
-    }
-
-    // ВАЖНО: если пользователь сказал «следующую/another/skip» — принудительно Next
-    let finalActions = enriched;
-    if (forcedNext) {
-      finalActions = [{ type:'player', action:'next' }];
-      if (!data.reply) data.reply = replyNextByLang(userText);
-    }
-
-    // БЕЗ автостарта при пустых действиях
+    // 5) запись истории и ответ (БЕЗ автостарта, если действий нет)
     pushHistory(sid, 'user', userText);
-    pushHistory(sid, 'assistant', JSON.stringify({ reply: data.reply || replyForActions(finalActions), actions: finalActions }));
+    pushHistory(sid, 'assistant', JSON.stringify({ reply: data.reply || replyForActions(out), actions: out }));
 
-    console.log(`[chat] ${Date.now()-t0}ms  a=${finalActions.length}  err=${data._error||''}`);
-    res.json({ reply: data.reply || replyForActions(finalActions) || 'Готово.', explain: data.explain || '', actions: finalActions });
+    console.log(`[chat] ${Date.now()-t0}ms  a=${out.length}  err=${data._error||''}`);
+    res.json({ reply: data.reply || replyForActions(out) || 'Готово.', explain: data.explain || '', actions: out });
   } catch (e) {
     console.error('[chat] ERROR', e);
     res.status(500).json({ reply: 'Локальный ИИ не ответил. Я переключусь на простое управление.', actions: [] });
@@ -619,4 +573,3 @@ app.listen(PORT, () => {
   console.log(`AI server on http://localhost:${PORT}`);
   console.log(`Using model="${OPENAI_MODEL}" via ${OPENAI_BASE_URL}  (${VERSION})`);
 });
-
