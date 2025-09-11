@@ -1,5 +1,5 @@
-// Chat Friend + AI bridge with memory + Provider + Server/Browser TTS
-// VERSION: chat.js v2.8.1 (anti AB-loop + correct pause/stop timers + wake/mic coexist) — 2025-09-10
+// Chat Friend + AI bridge with memory + Provider + Server/Browser TTS 
+// VERSION: chat.js v2.8.5 (timer fix + pause/stop suppression on delay + whats-playing intent + wake/mic coexist + mood suggestions + auto-next) — 2025-09-11
 (() => {
   if (window.__ASSISTANT_UI_INIT__) return;
   window.__ASSISTANT_UI_INIT__ = true;
@@ -23,7 +23,7 @@
     return "";
   }
   const isStr = (v) => typeof v === "string" && v.length > 0;
-  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   // всё, что похоже на «следующая/другая/another/next/skip»
   const NEXT_RE = /\b(следующ(ую|ий|ая)|друг(ую|ой)|ин(ую|ой)|нов(ую|ый)|another|next|skip|скип)\b/i;
@@ -46,7 +46,9 @@
       addMsg("note", `Язык речи закреплён: ${v.toUpperCase()}`);
     }
   }
-  function codeToBCP47(v) { return v === "uk" ? "uk-UA" : v === "ru" ? "ru-RU" : "en-US"; }
+  function codeToBCP47(v) {
+    return v === "uk" ? "uk-UA" : v === "ru" ? "ru-RU" : "en-US";
+  }
 
   // ─── UI ──────────────────────────────────────────────────────────────
   const root = document.createElement("div");
@@ -124,7 +126,7 @@
     .assistant__panel{position:fixed;right:18px;bottom:84px;width:min(92vw,520px);max-height:min(80vh,720px);display:flex;flex-direction:column;background:#111418;border:1px solid rgba(255,255,255,.06);border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.6);overflow:hidden}
     .assistant__header{display:flex;align-items:center;gap:.75rem;padding:.8rem 1rem;background:linear-gradient(180deg,#121821,#0e1318);border-bottom:1px solid rgba(255,255,255,.06)}
     .assistant__hdr-actions{margin-left:auto;display:flex;gap:.5rem;align-items:center}
-    .assistant__ai-badge{font:600 12px; color:#9ae6b4;background:#203021;border:1px solid #2b4a2d;padding:.25rem .4rem;border-radius:6px}
+    .assistant__ai-badge{font:600 12px;color:#9ae6b4;background:#203021;border:1px solid #2b4a2d;padding:.25rem .4rem;border-radius:6px}
     .assistant__prov-wrap{display:flex;align-items:center;gap:.35rem;color:#cbd5e1}
     .assistant__prov-wrap select{background:#0b0f14;border:1px solid #263142;color:#e8f1ff;border-radius:8px;padding:.2rem .35rem}
     .assistant__close,.assistant__gear{background:none;border:1px solid rgba(255,255,255,.14);color:#cbd5e1;width:32px;height:32px;border-radius:8px;cursor:pointer}
@@ -139,7 +141,7 @@
     .assistant__mic{background:#1f2836 !important;border:1px solid #2a3a52 !important;color:#cbd5e1 !important}
     .assistant__mic.is-on{outline:2px solid #0ea5e9}
     .assistant__settings{padding:.75rem;border-top:1px solid rgba(255,255,255,.08);background:#0f1216}
-    .assistant__row{display:flex;align-items:center;gap:.5rem;margin:.45rem 0}
+    .assistant__row{display:flex;align-items:center;gap:.5рем;margin:.45rem 0}
     .assistant__row > span{min-width:150px;opacity:.85}
     .assistant__hint{opacity:.7}
     #as-voice,#as-lang{flex:1;min-width:0;padding:.45rem .55rem;border-radius:8px;background:#0b0f14;border:1px solid #263142;color:#e8f1ff}
@@ -147,27 +149,31 @@
   document.head.appendChild(style);
 
   // refs
-  const panel    = root.querySelector(".assistant__panel");
+  const panel = root.querySelector(".assistant__panel");
   const btnClose = root.querySelector(".assistant__close");
-  const btnGear  = root.querySelector(".assistant__gear");
-  const logEl    = root.querySelector("#assistantLog");
-  const inputEl  = root.querySelector(".assistant__input");
-  const btnSend  = root.querySelector(".assistant__send");
-  const btnMic   = root.querySelector(".assistant__mic");
-  const selLang  = root.querySelector("#as-lang");
+  const btnGear = root.querySelector(".assistant__gear");
+  const logEl = root.querySelector("#assistantLog");
+  const inputEl = root.querySelector(".assistant__input");
+  const btnSend = root.querySelector(".assistant__send");
+  const btnMic = root.querySelector(".assistant__mic");
+  const selLang = root.querySelector("#as-lang");
   const selVoice = root.querySelector("#as-voice");
-  const selProv  = root.querySelector("#as-provider");
-  const chkTTS   = root.querySelector("#as-tts-server");
-  const btnTest  = root.querySelector("#as-test-voice");
-  const btnClr   = root.querySelector("#as-clear-log");
+  const selProv = root.querySelector("#as-provider");
+  const chkTTS = root.querySelector("#as-tts-server");
+  const btnTest = root.querySelector("#as-test-voice");
+  const btnClr = root.querySelector("#as-clear-log");
   const btnHideSettings = root.querySelector("#as-hide-settings");
-  const chkWake  = root.querySelector("#as-wake-on");
-  const inpWake  = root.querySelector("#as-wake-phrase");
+  const chkWake = root.querySelector("#as-wake-on");
+  const inpWake = root.querySelector("#as-wake-phrase");
 
   // ─── memory ───────────────────────────────────────────────────────────
   const chat = {
-    history: [], lastIds: [], lastGenre: null, lastMood: null,
-    nowPlaying: null, lastQuery: ""
+    history: [],
+    lastIds: [],
+    lastGenre: null,
+    lastMood: null,
+    nowPlaying: null,
+    lastQuery: "",
   };
 
   // кольцо последних ID (до 25) для exclude
@@ -179,8 +185,12 @@
       this.ids.push(id);
       if (this.ids.length > 25) this.ids.shift();
     },
-    has(id){ return this.ids.includes(id); },
-    list() { return [...this.ids]; },
+    has(id) {
+      return this.ids.includes(id);
+    },
+    list() {
+      return [...this.ids];
+    },
   };
 
   // клиентская очередь (управляем сами)
@@ -188,7 +198,10 @@
     ids: [],
     seed: "",
     busy: false,
-    clear(){ this.ids = []; this.seed = ""; },
+    clear() {
+      this.ids = [];
+      this.seed = "";
+    },
     async refill(q) {
       if (!API_BASE || this.busy) return;
       this.busy = true;
@@ -196,16 +209,18 @@
         const r = await fetch(`${API_BASE}/api/yt/search`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ q, max: 30, exclude: recent.list(), shuffle: true })
+          body: JSON.stringify({ q, max: 30, exclude: recent.list(), shuffle: true }),
         });
-        const j = await r.json().catch(()=>({ ids: [] }));
+        const j = await r.json().catch(() => ({ ids: [] }));
         const got = Array.isArray(j.ids) ? j.ids : [];
         this.seed = q;
         // жёсткий дедуп: выкидываем недавние
-        this.ids = got.filter(id => /^[A-Za-z0-9_-]{11}$/.test(id) && !recent.has(id));
+        this.ids = got.filter((id) => /^[A-Za-z0-9_-]{11}$/.test(id) && !recent.has(id));
       } catch (e) {
         console.warn("[queue] refill failed", e);
-      } finally { this.busy = false; }
+      } finally {
+        this.busy = false;
+      }
     },
     take() {
       while (this.ids.length) {
@@ -216,8 +231,8 @@
     },
     dropCurrent(id) {
       if (!id) return;
-      this.ids = this.ids.filter(x => x !== id);
-    }
+      this.ids = this.ids.filter((x) => x !== id);
+    },
   };
 
   // ─── Anti AB-loop detector ───────────────────────────────────────────
@@ -236,10 +251,10 @@
       if (uniq.length !== 2) return false;
       if (a[0] === a[1]) return false;
       for (let i = 2; i < a.length; i++) {
-        if (a[i] !== a[i-2]) return false;
+        if (a[i] !== a[i - 2]) return false;
       }
       return true; // A,B,A,B,A,B
-    }
+    },
   };
 
   window.addEventListener("AM.player.track", (e) => {
@@ -247,7 +262,10 @@
     const title = String(e?.detail?.title || "");
     let artist = "", song = "";
     const m = title.split(" - ");
-    if (m.length >= 2) { artist = m[0].trim(); song = m.slice(1).join(" - ").trim(); }
+    if (m.length >= 2) {
+      artist = m[0].trim();
+      song = m.slice(1).join(" - ").trim();
+    }
     chat.nowPlaying = { id, title, artist, song };
     if (id) {
       recent.add(id);
@@ -256,7 +274,7 @@
       loop.push(id);
 
       // разрыв «A-B-A-B» зацикливания
-      if (loop.isABPattern() && (Date.now() - loop.lastBreak > 5000)) {
+      if (loop.isABPattern() && Date.now() - loop.lastBreak > 5000) {
         loop.lastBreak = Date.now();
         const seed = chat.lastQuery || randomMixSeed();
         (async () => {
@@ -275,7 +293,10 @@
   selProv.value = provPref;
   selProv.addEventListener("change", () => {
     localStorage.setItem("assistant.provider", selProv.value);
-    addMsg("note", `Режим: ${selProv.value === "pro" ? "Pro (OpenAI)" : selProv.value === "free" ? "Free (локально)" : "Auto"}`);
+    addMsg(
+      "note",
+      `Режим: ${selProv.value === "pro" ? "Pro (OpenAI)" : selProv.value === "free" ? "Free (локально)" : "Auto"}`
+    );
   });
   function providerToSend() {
     const p = localStorage.getItem("assistant.provider") || "auto";
@@ -334,7 +355,10 @@
     });
     if (!r.ok) {
       let msg = `tts ${r.status}`;
-      try { const j = await r.json(); if (j?.error) msg += ` ${j.error}`; } catch {}
+      try {
+        const j = await r.json();
+        if (j?.error) msg += ` ${j.error}`;
+      } catch {}
       throw new Error(msg);
     }
     const buf = await r.arrayBuffer();
@@ -354,14 +378,17 @@
       try { window.speechSynthesis.cancel(); } catch {}
       const u = new SpeechSynthesisUtterance(text);
       const want = codeToBCP47(lang);
-      const wantPrefix = want.slice(0,2);
-      const voices = (window.speechSynthesis.getVoices?.() || [])
-        .filter(v => String(v.lang||"").toLowerCase().startsWith(wantPrefix));
+      const wantPrefix = want.slice(0, 2);
+      const voices = (window.speechSynthesis.getVoices?.() || []).filter((v) =>
+        String(v.lang || "").toLowerCase().startsWith(wantPrefix)
+      );
       // если пользователь выбрал голос, но он не совпадает по языку — игнорируем
-      let v = voices.find(v => v.name === tts.voiceName);
+      let v = voices.find((v) => v.name === tts.voiceName);
       if (!v) v = voices[0]; // первый подходящий
       if (v) u.voice = v;
-      u.lang = want; u.rate = 1; u.pitch = 1;
+      u.lang = want;
+      u.rate = 1;
+      u.pitch = 1;
       window.speechSynthesis.speak(u);
     } catch {}
   }
@@ -381,13 +408,18 @@
     }
   }
   function sampleByLang(lang) {
-    return lang === "uk" ? "Привіт! Перевірка голосу."
-         : lang === "en" ? "Hello! This is a voice test."
-         : "Привет! Проверка голоса.";
+    return lang === "uk"
+      ? "Привіт! Перевірка голосу."
+      : lang === "en"
+      ? "Hello! This is a voice test."
+      : "Привет! Проверка голоса.";
   }
 
   btnTest?.addEventListener("click", () => speak(sampleByLang(state.langPref)));
-  btnClr?.addEventListener("click", () => { logEl.innerHTML = ""; chat.history = []; });
+  btnClr?.addEventListener("click", () => {
+    logEl.innerHTML = "";
+    chat.history = [];
+  });
   btnHideSettings?.addEventListener("click", () => {
     const s = root.querySelector(".assistant__settings");
     if (s) s.hidden = true;
@@ -395,7 +427,12 @@
 
   // === Sleep timer (helpers) ===========================================
   let sleepTimerId = null, sleepAfterTrack = false, sleepAfterAction = "stop";
-  function clearSleepTimer() { if (sleepTimerId) { clearTimeout(sleepTimerId); sleepTimerId = null; } }
+  function clearSleepTimer() {
+    if (sleepTimerId) {
+      clearTimeout(sleepTimerId);
+      sleepTimerId = null;
+    }
+  }
   function scheduleActionLater(ms, op) {
     clearSleepTimer();
     sleepTimerId = setTimeout(() => {
@@ -409,27 +446,60 @@
     }, ms);
   }
   function parseSleepDuration(s) {
-    const r = /(\d{1,3})\s*(час(?:ов|а)?|h|hour|hours|мин(?:ут[ы|у])?|m|min|minutes|сек(?:унд[уы])?|s|sec|seconds)/i;
-    const m = String(s||"").toLowerCase().match(r);
+    const r =
+      /(\d{1,3})\s*(час(?:ов|а)?|h|hour|hours|мин(?:ут[ы|у])?|m|min|minutes|сек(?:унд[уы])?|s|sec|seconds)/i;
+    const m = String(s || "").toLowerCase().match(r);
     if (!m) return null;
-    const n = Number(m[1]||0); let unit = m[2]||"";
-    if (/^час|h|hour/.test(unit)) return n*3600*1000;
-    if (/^мин|m|min/.test(unit))  return n*60*1000;
-    return n*1000;
+    const n = Number(m[1] || 0);
+    let unit = m[2] || "";
+    if (/^час|h|hour/.test(unit)) return n * 3600 * 1000;
+    if (/^мин|m|min/.test(unit)) return n * 60 * 1000;
+    return n * 1000;
   }
+
+  // авто-продолжение по окончанию трека + «после текущего»
+  let lastEndedNextAt = 0;
   window.addEventListener("AM.player.ended", () => {
     if (sleepAfterTrack) {
       sleepAfterTrack = false;
       clearSleepTimer();
       if (sleepAfterAction === "pause") dispatch("player-pause");
       else dispatch("player-stop");
-      addMsg("note", sleepAfterAction === "pause" ? "⏰ Пауза после текущего трека." : "⏰ Остановлено после текущего трека.");
+      addMsg(
+        "note",
+        sleepAfterAction === "pause"
+          ? "⏰ Пауза после текущего трека."
+          : "⏰ Остановлено после текущего трека."
+      );
+      return;
+    }
+    // авто-next, если пользователь не просил «после текущего»
+    if (Date.now() - lastEndedNextAt > 1000) {
+      lastEndedNextAt = Date.now();
+      nextWithGuard();
+    }
+  });
+
+  // страховка тишины: если плеер сам встал на stop/pause после трека
+  let silenceTimer = null;
+  window.addEventListener("AM.player.state", (e) => {
+    const st = String(e?.detail?.state || "").toLowerCase(); // "paused"/"stopped"/"ended"
+    clearTimeout(silenceTimer);
+    if (!sleepAfterTrack && (st === "stopped" || st === "paused" || st === "ended")) {
+      silenceTimer = setTimeout(() => {
+        if (!sleepAfterTrack) nextWithGuard();
+      }, 3000);
     }
   });
 
   // ─── log/history ─────────────────────────────────────────────────────
   function addMsg(role, content) {
-    const cls = role === "user" ? "assistant__msg--user" : role === "bot" ? "assistant__msg--bot" : "assistant__msg--note";
+    const cls =
+      role === "user"
+        ? "assistant__msg--user"
+        : role === "bot"
+        ? "assistant__msg--bot"
+        : "assistant__msg--note";
     const d = document.createElement("div");
     d.className = `assistant__msg ${cls}`;
     d.textContent = String(content || "");
@@ -442,43 +512,127 @@
   }
 
   function dispatch(name, detail = {}) {
-    const ev = new CustomEvent(`assistant:${name}`, { detail, bubbles:true, composed:true });
+    const ev = new CustomEvent(`assistant:${name}`, { detail, bubbles: true, composed: true });
     window.dispatchEvent(ev);
-    document.dispatchEvent(new CustomEvent(`assistant:${name}`, { detail, bubbles:true, composed:true }));
+    document.dispatchEvent(new CustomEvent(`assistant:${name}`, { detail, bubbles: true, composed: true }));
   }
 
   // ─── mix seeds (рандом, без подряд-повторов) ─────────────────────────
   const MIX_SEEDS = [
-    "lofi hip hop radio","classic rock hits","best jazz music relaxing","indie rock playlist","hip hop playlist",
-    "edm house techno mix","ambient music long playlist","pop hits playlist","latin hits playlist",
-    "rnb soul classics playlist","best reggae mix",
+    "lofi hip hop radio",
+    "classic rock hits",
+    "best jazz music relaxing",
+    "indie rock playlist",
+    "hip hop playlist",
+    "edm house techno mix",
+    "ambient music long playlist",
+    "pop hits playlist",
+    "latin hits playlist",
+    "rnb soul classics playlist",
+    "best reggae mix",
   ];
   let lastMixSeed = "";
   function randomMixSeed() {
     if (!MIX_SEEDS.length) return "music radio mix";
-    let tries = 0, seed = MIX_SEEDS[(Math.random()*MIX_SEEDS.length)|0];
-    while (MIX_SEEDS.length > 1 && seed === lastMixSeed && tries < 6) { seed = MIX_SEEDS[(Math.random()*MIX_SEEDS.length)|0]; tries++; }
-    lastMixSeed = seed; return seed;
+    let tries = 0,
+      seed = MIX_SEEDS[(Math.random() * MIX_SEEDS.length) | 0];
+    while (MIX_SEEDS.length > 1 && seed === lastMixSeed && tries < 6) {
+      seed = MIX_SEEDS[(Math.random() * MIX_SEEDS.length) | 0];
+      tries++;
+    }
+    lastMixSeed = seed;
+    return seed;
   }
   function ensureMoodQuery(mood) {
-    const m = String(mood||"").toLowerCase();
+    const m = String(mood || "").toLowerCase();
     if (m === "happy") return "upbeat feel good hits";
-    if (m === "calm")  return "lofi chill beats to relax";
-    if (m === "sad")   return "sad emotional songs playlist";
+    if (m === "calm") return "lofi chill beats to relax";
+    if (m === "sad") return "sad emotional songs playlist";
     if (m === "energetic") return "high energy workout rock mix";
     return "music radio mix";
   }
   function ensureGenreQuery(genre) {
-    const g = String(genre||"").toLowerCase();
+    const g = String(genre || "").toLowerCase();
     const map = {
-      "джаз":"best jazz music relaxing","рок":"classic rock hits","поп":"pop hits playlist","электрон":"edm house techno mix",
-      "lofi":"lofi hip hop radio","классик":"classical symphony playlist","рэп":"hip hop playlist","инди":"indie rock playlist",
-      "ambient":"ambient music long playlist","блюз":"best blues songs playlist","шансон":"russian chanson mix",
-      "folk":"folk acoustic playlist","rnb":"rnb soul classics playlist","latin":"latin hits playlist","reggae":"best reggae mix",
-      "k-pop":"kpop hits playlist","j-pop":"jpop hits playlist","soundtrack":"movie soundtrack playlist"
+      джаз: "best jazz music relaxing",
+      рок: "classic rock hits",
+      поп: "pop hits playlist",
+      электрон: "edm house techno mix",
+      lofi: "lofi hip hop radio",
+      классик: "classical symphony playlist",
+      рэп: "hip hop playlist",
+      инди: "indie rock playlist",
+      ambient: "ambient music long playlist",
+      блюз: "best blues songs playlist",
+      шансон: "russian chanson mix",
+      folk: "folk acoustic playlist",
+      rnb: "rnb soul classics playlist",
+      latin: "latin hits playlist",
+      reggae: "best reggae mix",
+      "k-pop": "kpop hits playlist",
+      "j-pop": "jpop hits playlist",
+      soundtrack: "movie soundtrack playlist",
     };
     return map[g] || `${g} music playlist`;
   }
+
+  // ─── mood → подсказки жанров/артистов (локально, без LLM) ────────────
+  const MOOD_SUGGEST = {
+    ru: {
+      calm: {
+        genres: ["lofi", "ambient", "джаз", "чилаут", "неоклассика"],
+        artists: ["Nujabes", "Bonobo", "Brian Eno", "Massive Attack", "Ludovico Einaudi"],
+      },
+      happy: {
+        genres: ["поп", "инди-поп", "фанк", "диско"],
+        artists: ["Dua Lipa", "Pharrell Williams", "Daft Punk", "Maroon 5", "Foster The People"],
+      },
+      sad: {
+        genres: ["инди", "альт-рок", "акустика", "singer-songwriter"],
+        artists: ["Radiohead", "Billie Eilish", "Coldplay", "Damien Rice", "Adele"],
+      },
+      energetic: {
+        genres: ["рок", "панк", "EDM", "drum & bass"],
+        artists: ["The Prodigy", "Skrillex", "Rage Against The Machine", "Linkin Park", "Pendulum"],
+      },
+    },
+    uk: {
+      calm: {
+        genres: ["lofi", "ambient", "джаз", "чилаут", "неокласика"],
+        artists: ["Nujabes", "Bonobo", "Brian Eno", "Massive Attack", "Ludovico Einaudi"],
+      },
+      happy: {
+        genres: ["поп", "інді-поп", "фанк", "диско"],
+        artists: ["Dua Lipa", "Pharrell Williams", "Daft Punk", "Maroon 5", "Foster The People"],
+      },
+      sad: {
+        genres: ["інді", "альт-рок", "акустика", "singer-songwriter"],
+        artists: ["Radiohead", "Billie Eilish", "Coldplay", "Damien Rice", "Adele"],
+      },
+      energetic: {
+        genres: ["рок", "панк", "EDM", "drum & bass"],
+        artists: ["The Prodigy", "Skrillex", "Rage Against The Machine", "Linkin Park", "Pendulum"],
+      },
+    },
+    en: {
+      calm: {
+        genres: ["lofi", "ambient", "jazz", "chillout", "neoclassical"],
+        artists: ["Nujabes", "Bonobo", "Brian Eno", "Massive Attack", "Ludovico Einaudi"],
+      },
+      happy: {
+        genres: ["pop", "indie pop", "funk", "disco"],
+        artists: ["Dua Lipa", "Pharrell Williams", "Daft Punk", "Maroon 5", "Foster The People"],
+      },
+      sad: {
+        genres: ["indie", "alt rock", "acoustic", "singer-songwriter"],
+        artists: ["Radiohead", "Billie Eilish", "Coldplay", "Damien Rice", "Adele"],
+      },
+      energetic: {
+        genres: ["rock", "punk", "EDM", "drum & bass"],
+        artists: ["The Prodigy", "Skrillex", "Rage Against The Machine", "Linkin Park", "Pendulum"],
+      },
+    },
+  };
 
   // ─── Клиентский NEXT с очередью (анти-залипание) ─────────────────────
   async function nextWithGuard() {
@@ -522,7 +676,7 @@
       } else if (a?.type === "recommend") {
         dispatch("recommend", a);
         if (a.genre) chat.lastGenre = a.genre;
-        if (a.mood)  chat.lastMood  = a.mood;
+        if (a.mood) chat.lastMood = a.mood;
         if (a.autoplay && (a.genre || a.mood || a.like)) {
           const q = a.like ? a.like : a.genre ? ensureGenreQuery(a.genre) : ensureMoodQuery(a.mood);
           chat.lastQuery = q;
@@ -549,51 +703,122 @@
           chat.lastQuery = a.query;
           await cQueue.refill(a.query);
           const id = cQueue.take();
-          if (id) { dispatch("play", { id }); continue; }
+          if (id) {
+            dispatch("play", { id });
+            continue;
+          }
         }
         dispatch("play", { id: a.id, query: a.query, exclude: recent.list(), shuffle: true });
         const idd = getYouTubeId(a.id || a.query);
-        if (idd) { chat.lastIds = [idd]; recent.add(idd); cQueue.dropCurrent(idd); }
+        if (idd) {
+          chat.lastIds = [idd];
+          recent.add(idd);
+          cQueue.dropCurrent(idd);
+        }
       }
     }
   }
 
   function harvestIdsFromReply(txt = "") {
     const ids = new Set();
-    const urlRe = /\bhttps?:\/\/(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([A-Za-z0-9_-]{11})\b/g;
-    let m; while ((m = urlRe.exec(txt))) ids.add(m[1]);
+    const urlRe =
+      /\bhttps?:\/\/(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([A-Za-z0-9_-]{11})\b/g;
+    let m;
+    while ((m = urlRe.exec(txt))) ids.add(m[1]);
     const idRe = /\b([A-Za-z0-9_-]{11})\b/g;
     while ((m = idRe.exec(txt))) ids.add(m[1]);
     return Array.from(ids);
   }
 
-  // ─── Delay/After-current parsing ─────────────────────────────────────
-  function parseDelaySpec(s = "") {
-    const t = s.toLowerCase();
-    const wantsPause = /(пауз|pause)/.test(t);
-    const wantsStop  = /(выключ|останов|stop)/.test(t);
+  // ─── numbers-by-words → seconds ──────────────────────────────────────
+  function parseNumberWords(str) {
+    const s = String(str || "").toLowerCase().trim();
+    if (!s) return null;
+    const map = new Map(
+      Object.entries({
+        // RU
+        "ноль": 0, "один": 1, "одна": 1, "два": 2, "две": 2, "три": 3, "четыре": 4, "пять": 5, "шесть": 6, "семь": 7,
+        "восемь": 8, "девять": 9, "десять": 10, "одиннадцать": 11, "двенадцать": 12, "тринадцать": 13, "четырнадцать": 14,
+        "пятнадцать": 15, "шестнадцать": 16, "семнадцать": 17, "восемнадцать": 18, "девятнадцать": 19, "двадцать": 20,
+        "тридцать": 30, "сорок": 40, "пятьдесят": 50, "шестьдесят": 60, "полминуты": 30, "полчаса": 1800, "полторы": 1.5,
+        "полтора": 1.5, "несколько": 5, "пару": 2, "пара": 2,
+        // UK (минимальный набор)
+        "нуль": 0, "дві": 2, "чотири": 4, "п’ять": 5, "вісім": 8, "дев’ять": 9, "кілька": 5, "півхвилини": 30, "півгодини": 1800,
+        // EN
+        "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+        "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16,
+        "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60,
+        "half-minute": 30, "half an hour": 1800, "couple": 2, "few": 5,
+      })
+    );
+    if (map.has(s)) return map.get(s);
+    const tokens = s.split(/[\s-]+/g).filter(Boolean);
+    let total = 0, had = false;
+    for (const t of tokens) {
+      if (map.has(t)) { total += map.get(t); had = true; continue; }
+      const n = Number(t.replace(",", "."));
+      if (!Number.isNaN(n)) { total += n; had = true; }
+    }
+    return had ? total : null;
+  }
+
+  // ─── Delay/After-current parsing (расширенный) ───────────────────────
+  function parseDelaySpec(input = "") {
+    const t = String(input || "").toLowerCase();
+
+    const wantsPause =
+      /(постав(ь|ить).+пауз|на пауз|пауз(а|у)\b|пауза\b|pause)/.test(t);
+    const wantsStop = /(выключ|останов|стоп\b|stop)/.test(t);
     const op = wantsPause ? "pause" : wantsStop ? "stop" : null;
 
-    const afterCurrent = /(после\s+(этой|текущей)\s+(песни|композиции|трека)|after\s+(this|current)\s+(song|track))/.test(t);
+    const afterCurrent =
+      /(после\s+(этой|текущей)\s+(песни|композиции|трека)|after\s+(this|current)\s+(song|track))/.test(t);
 
-    let ms = null;
-    const m = t.match(/через\s+(\d{1,3})\s*(сек(?:унд[уы])?|с|sec|seconds|мин(?:ут[ы|у])?|m|min|minutes|час(?:ов|а)?|h|hour|hours)\b/);
-    if (m) {
-      const n = Number(m[1] || 0); const u = m[2] || "";
+    const UNIT =
+      /(сек(?:унд[уы|оче]к)?|s|sec|seconds|мин(?:ут[ы|у])?|m|min|minutes|час(?:ов|а)?|h|hour|hours)\b/i;
+
+    // цифрами: «через 10 секунд»
+    const m1 = t.match(/(?:через|за|на)\s+(\d{1,3})\s*([a-zа-яёіїє.]+)/i);
+    if (m1 && UNIT.test(m1[2])) {
+      const n = Number(m1[1]);
+      const u = String(m1[2] || "").replace(/[.,;:!?)+\]\s]+$/g, ""); // срезаем хвостовую пунктуацию
+      let ms = 0;
       if (/^час|h|hour/.test(u)) ms = n * 3600000;
       else if (/^мин|m|min/.test(u)) ms = n * 60000;
       else ms = n * 1000;
+      return { ms, afterCurrent: false, op: op || "pause" };
     }
 
-    if (afterCurrent || ms) {
-      return { ms, afterCurrent, op: op || (afterCurrent ? "stop" : "pause") };
+    // словами: «через десять секунд»
+    const m2 = t.match(/(?:через|за|на)\s+([a-zа-яёіїє \-]+)\s*([a-zа-яёіїє.]+)/i);
+    if (m2 && UNIT.test(m2[2])) {
+      const num = parseNumberWords(m2[1]);
+      if (num !== null) {
+        const u = String(m2[2] || "").replace(/[.,;:!?)+\]\s]+$/g, ""); // срезаем хвост
+        let seconds = 0;
+        if (/^час|h|hour/.test(u)) seconds = num * 3600;
+        else if (/^мин|m|min/.test(u)) seconds = num * 60;
+        else seconds = num;
+        const ms = Math.round(seconds * 1000);
+        return { ms, afterCurrent: false, op: op || "pause" };
+      }
     }
+
+    // формат «через 1:30»
+    const m3 = t.match(/(?:через|за)\s+(\d{1,2}):(\d{2})/);
+    if (m3) {
+      const mm = Number(m3[1] || 0), ss = Number(m3[2] || 0);
+      const ms = (mm * 60 + ss) * 1000;
+      return { ms, afterCurrent: false, op: op || "pause" };
+    }
+
+    if (afterCurrent) return { ms: null, afterCurrent: true, op: op || "stop" };
     return null;
   }
 
   // ─── Local intents (таймер/«после текущего»/хиты N часов) ────────────
   function tryAdvancedLocalIntents(traw) {
-    const text = String(traw||"");
+    const text = String(traw || "");
     const ds = parseDelaySpec(text);
     if (ds?.ms) {
       const secs = Math.round(ds.ms / 1000);
@@ -607,7 +832,10 @@
       sleepAfterTrack = true;
       sleepAfterAction = ds.op || "stop";
       clearSleepTimer();
-      addMsg("bot", ds.op === "pause" ? "Ок, поставлю на паузу после текущего трека." : "Ок, выключу после текущего трека.");
+      addMsg(
+        "bot",
+        ds.op === "pause" ? "Ок, поставлю на паузу после текущего трека." : "Ок, выключу после текущего трека."
+      );
       speak(ds.op === "pause" ? "Поставлю на паузу после текущего трека" : "Выключу после текущего трека");
       try { window.__AM_SLEEP_AFTER__ = true; } catch {}
       return true;
@@ -615,17 +843,22 @@
 
     // «хиты <артист> на 2 часа»
     const reThisArtist = /(хит(?:ов|ы)|лучшие|best of|hits).*(этого артиста).*(\d{1,2}.*(час|мин))/i;
-    const reNamed = /(хит(?:ов|ы)|лучшие|best of|hits)\s+([a-zа-яёіїє .'\-]+?)\s+(?:на|в течение|на протяжении)?\s*(\d{1,2}\s*(?:час|часа|часов|мин|минут|minutes?|hours?))/i;
-    let artist = "", durStr = ""; let m = text.toLowerCase().match(reThisArtist);
+    const reNamed =
+      /(хит(?:ов|ы)|лучшие|best of|hits)\s+([a-zа-яёіїє .'\-]+?)\s+(?:на|в течение|напротяжении)?\s*(\d{1,2}\s*(?:час|часа|часов|мин|минут|minutes?|hours?))/i;
+    let artist = "", durStr = "";
+    let m = text.toLowerCase().match(reThisArtist);
     if (m && chat.nowPlaying?.artist) { artist = chat.nowPlaying.artist; durStr = m[3] || ""; }
-    else { m = text.toLowerCase().match(reNamed); if (m) { artist = (m[2] || "").trim(); durStr = m[3] || ""; } }
+    else {
+      m = text.toLowerCase().match(reNamed);
+      if (m) { artist = (m[2] || "").trim(); durStr = m[3] || ""; }
+    }
     if (artist && durStr) {
       const ms = parseSleepDuration(durStr);
       if (ms) {
         const q = `${artist} greatest hits playlist`;
         chat.lastQuery = q;
-        addMsg("bot", `Ок, хиты ${artist} — поехали. Выключу через ${Math.round(ms/60000)} мин.`);
-        speak(`Включаю хиты ${artist}. Выключу через ${Math.round(ms/60000)} минут`);
+        addMsg("bot", `Ок, хиты ${artist} — поехали. Выключу через ${Math.round(ms / 60000)} мин.`);
+        speak(`Включаю хиты ${artist}. Выключу через ${Math.round(ms / 60000)} минут`);
         (async () => {
           await cQueue.refill(q);
           const id = cQueue.take();
@@ -646,8 +879,10 @@
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        message, history: chat.history, provider: providerToSend(),
-        langHint: state.langPref
+        message,
+        history: chat.history,
+        provider: providerToSend(),
+        langHint: state.langPref,
       }),
     });
     if (!r.ok) throw new Error(`API ${r.status}`);
@@ -659,6 +894,22 @@
     if (!v) return;
 
     addMsg("user", v);
+
+    // Локальный "что сейчас играет?" — без обращения к API
+    if (/(что\s+(сейчас\s+)?играет|что за трек|какой трек|what'?s\s+playing)/i.test(v)) {
+      const np = chat.nowPlaying;
+      const msg = np?.id
+        ? (np.title
+            ? `Сейчас играет: ${np.title}`
+            : (np.artist || np.song)
+              ? `Сейчас играет: ${[np.artist, np.song].filter(Boolean).join(" - ")}`
+              : "Сейчас что-то играет.")
+        : "Сейчас ничего не играет.";
+      addMsg("bot", msg);
+      speak(msg);
+      return;
+    }
+
     if (tryAdvancedLocalIntents(v)) return;
 
     // таймер авто-стоп/паузы в тексте
@@ -670,7 +921,10 @@
       const data = await callAI(v);
       if (data && isStr(data.reply)) {
         const harvested = harvestIdsFromReply(data.reply);
-        if (harvested.length) { chat.lastIds = harvested; harvested.forEach((id) => recent.add(id)); }
+        if (harvested.length) {
+          chat.lastIds = harvested;
+          harvested.forEach((id) => recent.add(id));
+        }
 
         addMsg("bot", data.reply);
         speak(data.reply);
@@ -680,37 +934,59 @@
         if (forcedNext) {
           await nextWithGuard();
         } else if (actions.length) {
+          // CRITICAL: не делать немедленный pause/stop, если пользователь просил задержку
           if (suppressImmediatePauseStop) {
-            actions = actions.filter((a) => !(a?.type === "player" && (a.action === "stop" || a.action === "pause")));
+            actions = actions.filter(
+              (a) => !(a?.type === "player" && (a.action === "stop" || a.action === "pause"))
+            );
           }
           const aPlay = actions.find((a) => a.type === "play" && (a.id || a.query));
           if (aPlay) {
             const id = getYouTubeId(aPlay.id || aPlay.query);
-            if (id) { chat.lastIds = [id]; recent.add(id); cQueue.dropCurrent(id); }
+            if (id) {
+              chat.lastIds = [id];
+              recent.add(id);
+              cQueue.dropCurrent(id);
+            }
             if (aPlay.query) chat.lastQuery = aPlay.query;
           }
           await runActions(actions);
 
           if (delaySpec?.ms) {
-            const secs = Math.round(delaySpec.ms/1000);
-            addMsg("note", delaySpec.op === "pause" ? `⏰ Поставлю на паузу через ~${secs} сек.` : `⏰ Выключусь через ~${secs} сек.`);
+            const secs = Math.round(delaySpec.ms / 1000);
+            addMsg(
+              "note",
+              delaySpec.op === "pause"
+                ? `⏰ Поставлю на паузу через ~${secs} сек.`
+                : `⏰ Выключусь через ~${secs} сек.`
+            );
             scheduleActionLater(delaySpec.ms, delaySpec.op);
           } else if (delaySpec?.afterCurrent) {
             sleepAfterTrack = true;
             sleepAfterAction = delaySpec.op || "stop";
             clearSleepTimer();
-            addMsg("note", sleepAfterAction === "pause" ? "⏰ Пауза после текущего трека." : "⏰ Выключусь после текущего трека.");
+            addMsg(
+              "note",
+              sleepAfterAction === "pause"
+                ? "⏰ Пауза после текущего трека."
+                : "⏰ Выключусь после текущего трека."
+            );
             try { window.__AM_SLEEP_AFTER__ = true; } catch {}
           }
         } else {
-          const localReply = await handleCommandLocal(v);
+          const localReply = await handleCommandLocal(v, /*suppressInstant*/ suppressImmediatePauseStop);
           addMsg("note", "[" + localReply + "]");
           if (delaySpec?.ms) scheduleActionLater(delaySpec.ms, delaySpec.op);
           else if (delaySpec?.afterCurrent) {
             sleepAfterTrack = true;
             sleepAfterAction = delaySpec.op || "stop";
             clearSleepTimer();
-            addMsg("note", sleepAfterAction === "pause" ? "⏰ Пауза после текущего трека." : "⏰ Выключусь после текущего трека.");
+            addMsg(
+              "note",
+              sleepAfterAction === "pause"
+                ? "⏰ Пауза после текущего трека."
+                : "⏰ Выключусь после текущего трека."
+            );
             try { window.__AM_SLEEP_AFTER__ = true; } catch {}
           }
         }
@@ -722,25 +998,53 @@
       console.warn("AI API error", e);
     }
 
-    const reply = await handleCommandLocal(v);
+    const reply = await handleCommandLocal(v, /*suppressInstant*/ suppressImmediatePauseStop);
     addMsg("bot", reply);
     speak(reply);
   }
 
   // ─── local fallback for simple commands ──────────────────────────────
-  async function handleCommandLocal(t) {
+  async function handleCommandLocal(t, suppressInstantPauseStop = false) {
     const text = (t || "").toLowerCase();
     const wantsPlay = /включ|поставь|play|запусти|вруби|сыграй/.test(text);
+    const hasDelayWords = /(через|после\s+(этой|текущей))/i.test(text);
 
-    if (/list|список|лист ?вью/.test(text)) { dispatch("view", { mode: "list" }); return "Включаю список"; }
-    if (/grid|сетка|карточк/.test(text))   { dispatch("view", { mode: "grid" }); return "Включаю сетку"; }
+    if (/list|список|лист ?вью/.test(text)) {
+      dispatch("view", { mode: "list" });
+      return "Включаю список";
+    }
+    if (/grid|сетка|карточк/.test(text)) {
+      dispatch("view", { mode: "grid" });
+      return "Включаю сетку";
+    }
 
-    if (NEXT_RE.test(text)) { await nextWithGuard(); return "Следующий трек"; }
+    if (NEXT_RE.test(text)) {
+      await nextWithGuard();
+      return "Следующий трек";
+    }
 
-    if (/prev|пред/.test(text))            { dispatch("player-prev"); return "Предыдущий трек"; }
-    if (/\b(пауза|pause)\b|останов/.test(text)) { dispatch("player-pause"); return "Пауза"; }
+    if (/prev|пред/.test(text)) {
+      dispatch("player-prev");
+      return "Предыдущий трек";
+    }
 
-    if (/(отмени|сбрось|cancel).*(таймер|timer)/.test(text)) { clearSleepTimer(); sleepAfterTrack=false; return "Таймер отменён"; }
+    // Мгновенные pause/stop — только если НЕ просили задержку
+    if (!suppressInstantPauseStop && !hasDelayWords) {
+      if (/\b(пауза|pause)\b/.test(text)) {
+        dispatch("player-pause");
+        return "Пауза";
+      }
+      if (/\b(стоп|выключи|останови|stop)\b/.test(text)) {
+        dispatch("player-stop");
+        return "Стоп";
+      }
+    }
+
+    if (/(отмени|сбрось|cancel).*(таймер|timer)/.test(text)) {
+      clearSleepTimer();
+      sleepAfterTrack = false;
+      return "Таймер отменён";
+    }
 
     if (/play|плей|включи|вруби|сыграй/.test(text)) {
       if (chat.lastIds.length) {
@@ -756,9 +1060,15 @@
       return "Играю";
     }
 
-    if (/тише|quieter|volume down|поменьше/.test(text)) { dispatch("volume", { delta: -0.1 }); return "Тише"; }
-    if (/громче|louder|volume up|погромче/.test(text))  { dispatch("volume", { delta: +0.1 }); return "Громче"; }
-    if (/(mix ?radio|микс|радио|random)/.test(text))    {
+    if (/тише|quieter|volume down|поменьше/.test(text)) {
+      dispatch("volume", { delta: -0.1 });
+      return "Тише";
+    }
+    if (/громче|louder|volume up|погромче/.test(text)) {
+      dispatch("volume", { delta: +0.1 });
+      return "Громче";
+    }
+    if (/(mix ?radio|микс|радио|random)/.test(text)) {
       const seed = randomMixSeed();
       chat.lastQuery = seed;
       await cQueue.refill(seed);
@@ -780,21 +1090,50 @@
       }
     }
 
+    // распознаём настроение → если без «включи», даём подсказки жанров/артистов
     const moods = [
       { re: /(весел|радіс|радост|happy|joy)/, mood: "happy" },
-      { re: /(спок|calm|chill|relax)/,        mood: "calm" },
-      { re: /(сум|sad|minor)/,                mood: "sad" },
-      { re: /(енерг|drive|бадьор|рок|rock)/,  mood: "energetic" }
+      { re: /(спок|calm|chill|relax)/, mood: "calm" },
+      { re: /(сум|sad|minor)/, mood: "sad" },
+      { re: /(енерг|drive|бадьор|рок|rock|energy|energetic)/, mood: "energetic" },
     ];
-    const m = moods.find(m => m.re.test(text));
+    const m = moods.find((m) => m.re.test(text));
     if (m) {
       const q = ensureMoodQuery(m.mood);
       chat.lastQuery = q;
-      await cQueue.refill(q);
-      const id = cQueue.take();
-      if (id) dispatch("play", { id });
-      else dispatch("play", { query: q, exclude: recent.list(), shuffle: true });
-      return wantsPlay ? "Підбираю та вмикаю…" : "Підбираю під настрій";
+
+      if (wantsPlay) {
+        await cQueue.refill(q);
+        const id = cQueue.take();
+        if (id) dispatch("play", { id });
+        else dispatch("play", { query: q, exclude: recent.list(), shuffle: true });
+        return "Підбираю та вмикаю…";
+      } else {
+        const dict = MOOD_SUGGEST[state.langPref] || MOOD_SUGGEST.ru;
+        const sug = dict[m.mood];
+        if (sug) {
+          addMsg(
+            "bot",
+            state.langPref === "en"
+              ? `For a ${m.mood} mood I can play genres: ${sug.genres.join(", ")}. Sample artists: ${sug.artists.join(
+                  ", "
+                )}. Say “play [genre/artist]” or “mix radio”.`
+              : state.langPref === "uk"
+              ? `Під ${m.mood} настрій можу запропонувати жанри: ${sug.genres.join(
+                  ", "
+                )}. Виконавці: ${sug.artists.join(
+                  ", "
+                )}. Скажи «включи [жанр/артиста]» або «мікс радіо».`
+              : `Под ${m.mood} настроение могу предложить жанры: ${sug.genres.join(
+                  ", "
+                )}. Исполнители: ${sug.artists.join(
+                  ", "
+                )}. Скажи «включи [жанр/исполнителя]» или «микс радио».`
+          );
+          return "Підбираю під настрій";
+        }
+        return "Підбираю під настрій";
+      }
     }
 
     const g = text.match(/жанр\s*([a-zа-яёіїє-]+)/i);
@@ -827,14 +1166,25 @@
 
   // ─── Mic + Wake word ─────────────────────────────────────────────────
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  function isWakeOn(){ return !!chkWake?.checked; }
-  function wakePhrases(){ return String(inpWake?.value||"").toLowerCase().split(/[,\|]/).map(s=>s.trim()).filter(Boolean); }
+  function isWakeOn() {
+    return !!chkWake?.checked;
+  }
+  function wakePhrases() {
+    return String(inpWake?.value || "")
+      .toLowerCase()
+      .split(/[,\|]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
 
   let wakeRec = null, wakeStopReq = false, wakeRestartTimer = null;
   let wakePausedForMic = false, wakeActive = false, wakeLogShown = false;
 
-  async function startWakeLoop(force=false) {
-    if (!SR) { addMsg("note","[Wake] Браузер не поддерживает распознавание речи."); return; }
+  async function startWakeLoop(force = false) {
+    if (!SR) {
+      addMsg("note", "[Wake] Браузер не поддерживает распознавание речи.");
+      return;
+    }
     if (!isWakeOn() && !force) return;
     if (wakeActive && !force) return;
 
@@ -850,16 +1200,22 @@
 
       rec.onstart = () => {
         wakeActive = true;
-        if (!wakeLogShown) { addMsg("note", "[Wake] Фоновое прослушивание включено."); wakeLogShown = true; }
+        if (!wakeLogShown) {
+          addMsg("note", "[Wake] Фоновое прослушивание включено.");
+          wakeLogShown = true;
+        }
       };
 
       rec.onresult = (ev) => {
-        const t = (ev.results?.[ev.results.length-1]?.[0]?.transcript || "").toLowerCase().trim();
-        const hot = wakePhrases().find(ph => t.startsWith(ph) || t.includes(" " + ph + " "));
+        const t = (ev.results?.[ev.results.length - 1]?.[0]?.transcript || "").toLowerCase().trim();
+        const hot = wakePhrases().find((ph) => t.startsWith(ph) || t.includes(" " + ph + " "));
         if (hot) {
           let cmd = t;
-          for (const ph of wakePhrases()) cmd = cmd.replace(new RegExp("^\\s*"+ph+"\\s*"), "").trim();
-          if (!cmd) { addMsg("note", "[Wake] Слушаю."); return; }
+          for (const ph of wakePhrases()) cmd = cmd.replace(new RegExp("^\\s*" + ph + "\\s*"), "").trim();
+          if (!cmd) {
+            addMsg("note", "[Wake] Слушаю.");
+            return;
+          }
           handleUserText(cmd);
         }
       };
@@ -875,24 +1231,38 @@
 
       rec.start();
     } catch (e) {
-      addMsg("note","[Wake] Не удалось запустить прослушивание.");
+      addMsg("note", "[Wake] Не удалось запустить прослушивание.");
     }
   }
 
-  function stopWakeLoop(silent=false) {
+  function stopWakeLoop(silent = false) {
     wakeStopReq = true;
     clearTimeout(wakeRestartTimer);
-    if (wakeRec) { try { wakeRec.onend = null; wakeRec.stop(); } catch{} wakeRec = null; }
+    if (wakeRec) {
+      try {
+        wakeRec.onend = null;
+        wakeRec.stop();
+      } catch {}
+      wakeRec = null;
+    }
     wakeStopReq = false;
     wakeActive = false;
-    if (!silent) { addMsg("note","[Wake] Выключено."); wakeLogShown = false; }
+    if (!silent) {
+      addMsg("note", "[Wake] Выключено.");
+      wakeLogShown = false;
+    }
   }
 
   if (chkWake) {
-    chkWake.addEventListener("change", () => { if (isWakeOn()) startWakeLoop(true); else stopWakeLoop(false); });
+    chkWake.addEventListener("change", () => {
+      if (isWakeOn()) startWakeLoop(true);
+      else stopWakeLoop(false);
+    });
   }
   if (inpWake) {
-    inpWake.addEventListener("change", () => { if (SR && isWakeOn()) startWakeLoop(true); });
+    inpWake.addEventListener("change", () => {
+      if (SR && isWakeOn()) startWakeLoop(true);
+    });
   }
 
   // Кнопка микрофона — разовый слушатель (коэкзистенция с wake)
@@ -900,31 +1270,62 @@
     btnMic.addEventListener("click", () => {
       try {
         // временно приостанавливаем wake
-        if (isWakeOn() && wakeActive) { wakePausedForMic = true; stopWakeLoop(true); }
+        if (isWakeOn() && wakeActive) {
+          wakePausedForMic = true;
+          stopWakeLoop(true);
+        }
 
         const rec = new SR();
         rec.lang = codeToBCP47(state.langPref);
-        rec.interimResults = false; rec.maxAlternatives = 1;
+        rec.interimResults = false;
+        rec.maxAlternatives = 1;
         btnMic.classList.add("is-on");
 
-        rec.onresult = (ev) => { const t = ev.results?.[0]?.[0]?.transcript || ""; handleUserText(t); };
-        rec.onerror = () => { addMsg("bot","Не вышло распознать голос"); };
+        rec.onresult = (ev) => {
+          const t = ev.results?.[0]?.[0]?.transcript || "";
+          handleUserText(t);
+        };
+        rec.onerror = () => {
+          addMsg("bot", "Не вышло распознать голос");
+        };
         rec.onend = () => {
           btnMic.classList.remove("is-on");
           // аккуратно возобновляем wake (если включён в настройках)
-          if (isWakeOn()) { wakePausedForMic = false; startWakeLoop(true); }
+          if (isWakeOn()) {
+            wakePausedForMic = false;
+            startWakeLoop(true);
+          }
         };
         rec.start();
-      } catch { addMsg("bot","Розпізнавач недоступний"); }
+      } catch {
+        addMsg("bot", "Розпізнавач недоступний");
+      }
     });
   }
 
   // ─── wiring ──────────────────────────────────────────────────────────
-  root.querySelector(".assistant__toggle").addEventListener("click", () => { panel.hidden = !panel.hidden; });
-  btnClose.addEventListener("click", () => { panel.hidden = true; });
-  btnGear.addEventListener("click", () => { const s = root.querySelector(".assistant__settings"); if (s) s.hidden = !s.hidden; });
-  btnSend.addEventListener("click", () => { const t = inputEl.value; inputEl.value = ""; handleUserText(t); });
-  inputEl.addEventListener("keydown", (e) => { if (e.key === "Enter") { const t = inputEl.value; inputEl.value = ""; handleUserText(t); } });
+  root.querySelector(".assistant__toggle").addEventListener("click", () => {
+    panel.hidden = !panel.hidden;
+  });
+  btnClose.addEventListener("click", () => {
+    panel.hidden = true;
+  });
+  btnGear.addEventListener("click", () => {
+    const s = root.querySelector(".assistant__settings");
+    if (s) s.hidden = !s.hidden;
+  });
+  btnSend.addEventListener("click", () => {
+    const t = inputEl.value;
+    inputEl.value = "";
+    handleUserText(t);
+  });
+  inputEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      const t = inputEl.value;
+      inputEl.value = "";
+      handleUserText(t);
+    }
+  });
 
   // автозапуск wake-loop, если включён
   if (SR && isWakeOn()) startWakeLoop();

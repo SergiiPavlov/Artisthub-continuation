@@ -79,10 +79,12 @@
 
   document.addEventListener("assistant:player-stop", () => {
     const p = player();
-    if (!p || !safeCall(p.stop)) {
-      clickFirst(".am-player [data-action='stop']",
-                 "button[aria-label='Stop']");
-    }
+     if (p && safeCall(p.stop)) return;
+    // 2) пробуем кнопки стопа
+    if (clickFirst(".am-player [data-action='stop']", "button[aria-label='Stop']")) return;
+    // 3) деградация в паузу
+    if (p && safeCall(p.pause)) return;
+    clickFirst(".am-player [data-action='pause']", "button[aria-label='Pause']");
   });
 
   document.addEventListener("assistant:player-next", () => {
