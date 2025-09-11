@@ -1,99 +1,179 @@
-// src/js/artists/features/player-patch.js
-// Фиксы: ни одного passive-listener там, где вызывается preventDefault,
-// + корректное перетаскивание пузыря без "залипания".
+/*
+  player-patch.js — patch-v1.4.0-2025-09-09
+  Мост assistant:* ↔ публичное API плеера.
+  Важно: не ломаем контракт событий и Player API.
+*/
 
 export default function mountPlayerPatch(player) {
-  // Базовые элементы
-  const dock = document.querySelector(".am-player");
-  if (!dock) return;
+  try { window.__AM_PLAYER_PATCH_INSTALLED__ = true; } catch {}
 
-  const bubble = document.querySelector(".am-player__bubble");
-  const dragzone = document.querySelector(".am-player__dragzone");
+  if (!player || typeof player !== "object") {
+    console.warn("[player-patch] No player instance provided");
+    return;
+  }
 
-  // Разрешаем кастомные жесты без прокрутки страницы
-  [bubble, dragzone].forEach((el) => {
-    if (el) el.style.touchAction = "none";
+  const clamp01 = (x) => Math.max(0, Math.min(1, Number(x) || 0));
+
+  // Разбор ID/URL
+  function toVideoId(urlOrId) {
+    const s = String(urlOrId || "").trim();
+    if (!s) return "";
+    if (/^[A-Za-z0-9_-]{11}$/.test(s)) return s;
+    try {
+      const u = new URL(s, location.href);
+      if (/(^|\.)youtu\.be$/i.test(u.hostname)) {
+        const cand = u.pathname.replace(/^\/+/, "");
+        return /^[A-Za-z0-9_-]{11}$/.test(cand) ? cand : "";
+      }
+      const v = u.searchParams.get("v");
+      if (v && /^[A-Za-z0-9_-]{11}$/.test(v)) return v;
+      const m = u.pathname.match(/\/(?:embed|v|shorts)\/([^/?#]+)/i);
+      if (m && m[1] && /^[A-Za-z0-9_-]{11}$/.test(m[1])) return m[1];
+    } catch {}
+    return "";
+  }
+
+  const MIX_SEEDS = [
+    "random music mix",
+    "popular hits playlist",
+    "indie rock mix",
+    "classic rock hits",
+    "lofi chill beats to relax",
+    "jazz essentials playlist",
+    "hip hop classic mix",
+    "ambient focus music long"
+  ];
+
+  const call = (name, ...args) => {
+    const fn = player?.[name];
+    if (typeof fn === "function") {
+      try { return fn.apply(player, args); }
+      catch (e) { console.warn(`[player-patch] ${name} failed`, e); }
+    }
+  };
+
+  // Антидубль
+  const recently = new Map();
+  function dedup(key, ttl = 350) {
+    const now = Date.now();
+    const last = recently.get(key) || 0;
+    if (now - last < ttl) return true;
+    recently.set(key, now);
+    return false;
+  }
+
+  // === PLAY ===
+  window.addEventListener("assistant:play", (e) => {
+    const rawId  = e?.detail?.id ?? "";
+    const query  = e?.detail?.query ?? "";
+    const key    = "play|" + JSON.stringify({ rawId, query });
+    if (dedup(key)) return;
+
+    const vid = toVideoId(rawId);
+    if (vid) {
+      call("open", vid);
+    } else if (query && player.playSearch) {
+      call("playSearch", String(query));
+    } else if (rawId) {
+      call("playSearch", String(rawId));
+    }
   });
 
-  // Используем не-passive слушатели там, где можем вызвать preventDefault
-  const NP = { passive: false };
+  // === MIXRADIO ===
+  window.addEventListener("assistant:mixradio", () => {
+    if (document.querySelector("#random-radio")) return;
+    const seed = MIX_SEEDS[(Math.random() * MIX_SEEDS.length) | 0];
+    if (player.playSearch) call("playSearch", seed);
+  });
 
-  // Универсальная точка старта перетаскивания: либо сам bubble, либо dragzone
-  const handle = bubble || dragzone;
-  if (!handle) return;
+  // === TRANSPORT ===
+  window.addEventListener("assistant:player-play",  () => call("play"));
+  window.addEventListener("assistant:player-pause", () => call("pause"));
+  window.addEventListener("assistant:player-stop",  () => call("stop"));
+  window.addEventListener("assistant:player-next",  () => call("next"));
+  window.addEventListener("assistant:player-prev",  () => call("prev"));
 
-  let dragging = false;
-  let startX = 0, startY = 0;
-  let baseLeft = 0, baseTop = 0;
+  // === UI ===
+  window.addEventListener("assistant:minimize", () => call("minimize"));
+  window.addEventListener("assistant:expand",   () => call("expand"));
 
-  // вспомогательно: координаты из pointer/touch/mouse события
-  const point = (ev) => {
-    if (ev.touches && ev.touches[0]) {
-      return { x: ev.touches[0].clientX, y: ev.touches[0].clientY };
+  // === ГРОМКОСТЬ ===
+  window.addEventListener("assistant:volume", (e) => {
+    const d = Number(e?.detail?.delta || 0);
+    if (!Number.isFinite(d)) return;
+    if (typeof player.getVolume === "function" && typeof player.setVolume === "function") {
+      const cur = Number(player.getVolume() || 0);
+      call("setVolume", clamp01(cur + d));
     }
-    if (ev.changedTouches && ev.changedTouches[0]) {
-      return { x: ev.changedTouches[0].clientX, y: ev.changedTouches[0].clientY };
+  });
+
+  // === RECOMMEND (autoplay) ===
+  window.addEventListener("assistant:recommend", (e) => {
+    const a = e?.detail || {};
+    if (!a || a.autoplay !== true) return;
+
+    const looksLikeTrack = (s) => {
+      const t = String(s || "").toLowerCase();
+      return /["«»“”„‟]/.test(s) || t.includes(' - ') || /(official|audio|video|lyrics|remaster)/.test(t);
+    };
+
+    let q = "";
+    if (a.like) {
+      const like = String(a.like).trim();
+      if (!like) return;
+      // если похоже на конкретный трек → одиночный трек
+      // иначе — хиты артиста (плейлист)
+      q = looksLikeTrack(like)
+        ? `${like} official audio`
+        : `${like} greatest hits playlist`;
+    } else if (a.genre) {
+      const map = new Map([
+        ["джаз", "best jazz music relaxing"],
+        ["рок", "classic rock hits"],
+        ["поп", "pop hits playlist"],
+        ["электрон", "edm house techno mix"],
+        ["lofi", "lofi hip hop radio"],
+        ["классик", "classical symphony playlist"],
+        ["рэп", "hip hop playlist"],
+        ["инди", "indie rock playlist"],
+        ["ambient", "ambient music long playlist"],
+        ["блюз", "best blues songs playlist"],
+        ["шансон", "russian chanson mix"],
+        ["folk", "folk acoustic playlist"],
+        ["rnb", "rnb soul classics playlist"],
+        ["latin", "latin hits playlist"],
+        ["reggae", "best reggae mix"],
+        ["k-pop", "kpop hits playlist"],
+        ["j-pop", "jpop hits playlist"],
+        ["soundtrack", "movie soundtrack playlist"]
+      ]);
+      q = map.get(String(a.genre).toLowerCase()) || `${a.genre} music playlist`;
+    } else if (a.mood) {
+      const moods = new Map([
+        ["happy", "upbeat feel good hits"],
+        ["calm", "chillout ambient relaxing playlist"],
+        ["sad", "sad indie playlist"],
+        ["energetic", "energetic edm gym playlist"]
+      ]);
+      q = moods.get(String(a.mood).toLowerCase()) || "music playlist";
     }
-    return { x: ev.clientX, y: ev.clientY };
-  };
 
-  const onDown = (ev) => {
-    const p = point(ev);
-    startX = p.x;
-    startY = p.y;
+    if (q && player.playSearch) call("playSearch", q);
+  });
 
-    // Будем таскать именно пузырь, а не весь док
-    const target = bubble || dock;
-    const rect = target.getBoundingClientRect();
-    baseLeft = rect.left;
-    baseTop  = rect.top;
-
-    dragging = true;
-
-    // предотвращаем прокрутку страницы во время drag
-    if (ev.cancelable) ev.preventDefault();
-
-    window.addEventListener("touchmove", onMove, NP);
-    window.addEventListener("mousemove", onMove, NP);
-    window.addEventListener("touchend", onUp, NP);
-    window.addEventListener("mouseup", onUp, NP);
-  };
-
-  const onMove = (ev) => {
-    if (!dragging) return;
-
-    const p = point(ev);
-    const dx = p.x - startX;
-    const dy = p.y - startY;
-
-    const target = bubble || dock;
-    const w = target.offsetWidth || 0;
-    const h = target.offsetHeight || 0;
-
-    // позиционируем как fixed-элемент (центрируем по точке)
-    target.style.position = "fixed";
-    target.style.left = `${Math.round(baseLeft + dx)}px`;
-    target.style.top  = `${Math.round(baseTop  + dy)}px`;
-    target.style.right = "auto";
-    target.style.bottom = "auto";
-
-    if (ev.cancelable) ev.preventDefault();
-  };
-
-  const onUp = (ev) => {
-    dragging = false;
-    window.removeEventListener("touchmove", onMove, NP);
-    window.removeEventListener("mousemove", onMove, NP);
-    window.removeEventListener("touchend", onUp, NP);
-    window.removeEventListener("mouseup", onUp, NP);
-    if (ev.cancelable) ev.preventDefault();
-  };
-
-  // Ставим слушатели с НЕ-passive опцией
-  handle.addEventListener("touchstart", onDown, NP);
-  handle.addEventListener("mousedown", onDown, NP);
-
-  // Дополнительно: если плеер свёрнут, клики/скролл должны проходить "сквозь"
-  // сам док, но оставаться на пузыре.
-  dock.classList.add("am-player--patch-applied");
+  // Совместимость doc→win, если нет внешнего bridge
+  if (!(typeof window !== 'undefined' && window.__AH_BRIDGE_PRESENT === true)) {
+    document.addEventListener("assistant:play",       (e) => window.dispatchEvent(new CustomEvent("assistant:play",       { detail: e.detail })));
+    document.addEventListener("assistant:mixradio",   (e) => window.dispatchEvent(new CustomEvent("assistant:mixradio",   { detail: e.detail })));
+    document.addEventListener("assistant:player-play",(e) => window.dispatchEvent(new CustomEvent("assistant:player-play",{ detail: e.detail })));
+    document.addEventListener("assistant:player-pause",(e)=> window.dispatchEvent(new CustomEvent("assistant:player-pause",{ detail: e.detail })));
+    document.addEventListener("assistant:player-stop",(e) => window.dispatchEvent(new CustomEvent("assistant:player-stop",{ detail: e.detail })));
+    document.addEventListener("assistant:player-next",(e) => window.dispatchEvent(new CustomEvent("assistant:player-next",{ detail: e.detail })));
+    document.addEventListener("assistant:player-prev",(e) => window.dispatchEvent(new CustomEvent("assistant:player-prev",{ detail: e.detail })));
+    document.addEventListener("assistant:minimize",   (e) => window.dispatchEvent(new CustomEvent("assistant:minimize",   { detail: e.detail })));
+    document.addEventListener("assistant:expand",     (e) => window.dispatchEvent(new CustomEvent("assistant:expand",     { detail: e.detail })));
+    document.addEventListener("assistant:volume",     (e) => window.dispatchEvent(new CustomEvent("assistant:volume",     { detail: e.detail })));
+    document.addEventListener("assistant:recommend",  (e) => window.dispatchEvent(new CustomEvent("assistant:recommend",  { detail: e.detail })));
+  }
 }
+
