@@ -1,6 +1,6 @@
 // Chat Friend + AI bridge with memory + Provider + Server/Browser TTS
-// VERSION: chat.js v2.8.6
-// (debounced SR + manual-pause guard + local "what's playing" + wake/mic coexist + mood suggestions + auto-next)
+// VERSION: chat.js v2.8.8
+// (stronger delay parser + ms validation + action sanitization + logs)
 // — 2025-09-11
 (() => {
   if (window.__ASSISTANT_UI_INIT__) return;
@@ -397,9 +397,8 @@
       const voices = (window.speechSynthesis.getVoices?.() || []).filter((v) =>
         String(v.lang || "").toLowerCase().startsWith(wantPrefix)
       );
-      // если пользователь выбрал голос, но он не совпадает по языку — игнорируем
       let v = voices.find((v) => v.name === tts.voiceName);
-      if (!v) v = voices[0]; // первый подходящий
+      if (!v) v = voices[0];
       if (v) u.voice = v;
       u.lang = want;
       u.rate = 1;
@@ -459,6 +458,14 @@
   }
   function scheduleActionLater(ms, op) {
     clearSleepTimer();
+    // валидация и минимальный разумный порог
+    if (!Number.isFinite(ms) || ms <= 0) {
+      console.warn("[timer] invalid ms:", ms);
+      addMsg("note", "⏱ Не понял время для таймера. Скажи, например, «через 20 секунд» или «через 1:30».");
+      return;
+    }
+    const msSafe = Math.max(500, Math.round(ms));
+    addMsg("note", `⏱ Таймер установлен: ${Math.round(msSafe / 1000)} сек → ${op === "pause" ? "пауза" : "стоп"}.`);
     sleepTimerId = setTimeout(() => {
       if (op === "pause") {
         dispatch("player-pause");
@@ -468,19 +475,20 @@
         dispatch("player-stop");
         addMsg("note", "⏰ Таймер: стоп.");
       }
-    }, ms);
+    }, msSafe);
   }
   function parseSleepDuration(s) {
     const r =
-      /(\d{1,3})\s*(час(?:ов|а)?|h|hour|hours|мин(?:ут[ы|у])?|m|min|minutes|сек(?:унд[уы])?|s|sec|seconds)/i;
+      /(\d{1,3})\s*(час(?:ов|а)?|h|hour|hours|минут(?:ы|у)?|мин|m|min|minutes|секунд(?:ы|у)?|сек|s|sec|seconds)/i;
     const m = String(s || "").toLowerCase().match(r);
     if (!m) return null;
     const n = Number(m[1] || 0);
-    let unit = m[2] || "";
+    const unit = (m[2] || "").toLowerCase();
     if (/^час|h|hour/.test(unit)) return n * 3600 * 1000;
-    if (/^мин|m|min/.test(unit)) return n * 60 * 1000;
+    if (/^мин|minutes?/.test(unit) || /^минут/.test(unit) || unit === "m" || unit === "min") return n * 60 * 1000;
     return n * 1000;
   }
+  const DASH = /[–—-]/; // en dash / em dash / hyphen
 
   // авто-продолжение по окончанию трека + «после текущего»
   let lastEndedNextAt = 0;
@@ -507,13 +515,12 @@
     }
   });
 
-  // страховка тишины: если плеер сам встал на stop/pause после трека
+  // страховка тишины
   let silenceTimer = null;
   window.addEventListener("AM.player.state", (e) => {
     const st = String(e?.detail?.state || "").toLowerCase(); // "paused"/"stopped"/"ended"
     clearTimeout(silenceTimer);
     if (!sleepAfterTrack && (st === "stopped" || st === "ended" || st === "paused")) {
-      // если пауза была намеренной — не «оживляем» трек
       if (st === "paused" && Date.now() < manualPauseGuardUntil) return;
       silenceTimer = setTimeout(() => {
         if (!sleepAfterTrack && !(st === "paused" && Date.now() < manualPauseGuardUntil)) {
@@ -548,7 +555,7 @@
     document.dispatchEvent(new CustomEvent(`assistant:${name}`, { detail, bubbles: true, composed: true }));
   }
 
-  // ─── mix seeds (рандом, без подряд-повторов) ─────────────────────────
+  // ─── mix seeds ───────────────────────────────────────────────────────
   const MIX_SEEDS = [
     "lofi hip hop radio",
     "classic rock hits",
@@ -607,7 +614,7 @@
     return map[g] || `${g} music playlist`;
   }
 
-  // ─── mood → подсказки жанров/артистов (локально, без LLM) ────────────
+  // ─── mood suggestions ────────────────────────────────────────────────
   const MOOD_SUGGEST = {
     ru: {
       calm: {
@@ -665,9 +672,8 @@
     },
   };
 
-  // ─── Клиентский NEXT с очередью (анти-залипание) ─────────────────────
+  // ─── NEXT with guard ─────────────────────────────────────────────────
   async function nextWithGuard() {
-    // если есть клиентская очередь — берём оттуда
     let id = cQueue.take();
     if (!id && chat.lastQuery) {
       await cQueue.refill(chat.lastQuery);
@@ -678,7 +684,6 @@
       return;
     }
 
-    // иначе — сторож для встроенного плейлиста
     const prevId = chat.nowPlaying?.id || "";
     dispatch("player-next");
     await sleep(700);
@@ -711,7 +716,6 @@
         if (a.autoplay && (a.genre || a.mood || a.like)) {
           const q = a.like ? a.like : a.genre ? ensureGenreQuery(a.genre) : ensureMoodQuery(a.mood);
           chat.lastQuery = q;
-          // префетчим очередь, стартуем с первого id
           await cQueue.refill(q);
           const id = cQueue.take();
           if (id) dispatch("play", { id });
@@ -761,7 +765,7 @@
     return Array.from(ids);
   }
 
-  // ─── numbers-by-words → seconds ──────────────────────────────────────
+  // ─── numbers-by-words → number ───────────────────────────────────────
   function parseNumberWords(str) {
     const s = String(str || "").toLowerCase().trim();
     if (!s) return null;
@@ -771,6 +775,8 @@
         "ноль": 0,
         "один": 1,
         "одна": 1,
+        "одной": 1,
+        "одну": 1,
         "два": 2,
         "две": 2,
         "три": 3,
@@ -864,8 +870,16 @@
   }
 
   // ─── Delay/After-current parsing (расширенный) ───────────────────────
+  function toMs(n, unit) {
+    const u = String(unit || "").toLowerCase().replace(/[.,;:!?)+\]\s]+$/g, "");
+    if (/^час|h|hour/.test(u)) return n * 3600 * 1000;
+    if (/^мин|m|min|minutes?/.test(u) || /^минут/.test(u)) return n * 60 * 1000;
+    if (/^сек|s|sec|seconds?/.test(u) || /^секунд/.test(u)) return n * 1000;
+    return n * 1000;
+  }
+
   function parseDelaySpec(input = "") {
-    const t = String(input || "").toLowerCase();
+    const t = String(input || "").toLowerCase().replace(/[–—]/g, "-");
 
     const wantsPause = /(постав(ь|ить).+пауз|на пауз|пауз(а|у)\b|пауза\b|pause)/.test(t);
     const wantsStop = /(выключ|останов|стоп\b|stop)/.test(t);
@@ -874,43 +888,43 @@
     const afterCurrent =
       /(после\s+(этой|текущей)\s+(песни|композиции|трека)|after\s+(this|current)\s+(song|track))/.test(t);
 
-    const UNIT = /(сек(?:унд[уы|оче]к)?|s|sec|seconds|мин(?:ут[ы|у])?|m|min|minutes|час(?:ов|а)?|h|hour|hours)\b/i;
-
-    // цифрами: «через 10 секунд»
-    const m1 = t.match(/(?:через|за|на)\s+(\d{1,3})\s*([a-zа-яёіїє.]+)/i);
-    if (m1 && UNIT.test(m1[2])) {
-      const n = Number(m1[1]);
-      const u = String(m1[2] || "").replace(/[.,;:!?)+\]\s]+$/g, ""); // срезаем хвостовую пунктуацию
-      let ms = 0;
-      if (/^час|h|hour/.test(u)) ms = n * 3600000;
-      else if (/^мин|m|min/.test(u)) ms = n * 60000;
-      else ms = n * 1000;
-      return { ms, afterCurrent: false, op: op || "pause" };
-    }
-
-    // словами: «через десять секунд»
-    const m2 = t.match(/(?:через|за|на)\s+([a-zа-яёіїє \-]+)\s*([a-zа-яёіїє.]+)/i);
-    if (m2 && UNIT.test(m2[2])) {
-      const num = parseNumberWords(m2[1]);
-      if (num !== null) {
-        const u = String(m2[2] || "").replace(/[.,;:!?)+\]\s]+$/g, ""); // срезаем хвост
-        let seconds = 0;
-        if (/^час|h|hour/.test(u)) seconds = num * 3600;
-        else if (/^мин|m|min/.test(u)) seconds = num * 60;
-        else seconds = num;
-        const ms = Math.round(seconds * 1000);
-        return { ms, afterCurrent: false, op: op || "pause" };
-      }
-    }
-
-    // формат «через 1:30»
-    const m3 = t.match(/(?:через|за)\s+(\d{1,2}):(\d{2})/);
-    if (m3) {
-      const mm = Number(m3[1] || 0),
-        ss = Number(m3[2] || 0);
+    // mm:ss
+    let m = t.match(/(?:через|за)\s+(\d{1,2}):(\d{2})/);
+    if (m) {
+      const mm = Number(m[1] || 0),
+        ss = Number(m[2] || 0);
       const ms = (mm * 60 + ss) * 1000;
       return { ms, afterCurrent: false, op: op || "pause" };
     }
+
+    // перечисления/диапазоны: "через 10, 15, 20 секунд" / "через 15-20 секунд"
+    m = t.match(
+      /(?:через|за|на)\s+([0-9 ,.-]{1,20})\s*(сек(?:унд\w*)?|s|sec|seconds|мин(?:ут\w*)?|m|min|minutes|час(?:\w*)?|h|hour|hours)\b/i
+    );
+    if (m) {
+      const seq = String(m[1]).split(/[^\d]+/).filter(Boolean).map(Number);
+      const n = seq.length ? seq[seq.length - 1] : NaN;
+      if (Number.isFinite(n)) return { ms: toMs(n, m[2]), afterCurrent: false, op: op || "pause" };
+    }
+
+    // цифрами: «через 10 секунд»
+    m = t.match(/(?:через|за|на)\s+(\d{1,3})\s*([a-zа-яёіїє.]+)/i);
+    if (m) {
+      const n = Number(m[1]);
+      const u = String(m[2] || "");
+      if (!Number.isNaN(n)) return { ms: toMs(n, u), afterCurrent: false, op: op || "pause" };
+    }
+
+    // словами: «через десять секунд», «через одну минуту»
+    m = t.match(/(?:через|за|на)\s+([a-zа-яёіїє \-]+)\s*([a-zа-яёіїє.]+)/i);
+    if (m) {
+      const num = parseNumberWords(m[1]);
+      if (num !== null) return { ms: toMs(num, m[2]), afterCurrent: false, op: op || "pause" };
+    }
+
+    // неявная 1: «через минуту/секунду/час»
+    m = t.match(/(?:через|за|на)\s*(минут[ауы]?|секунд[ауы]?|час[ауы]?)/i);
+    if (m) return { ms: toMs(1, m[1]), afterCurrent: false, op: op || "pause" };
 
     if (afterCurrent) return { ms: null, afterCurrent: true, op: op || "stop" };
     return null;
@@ -1001,7 +1015,7 @@
     let v = String(text || "").trim();
     if (!v) return;
 
-    // внешний препроцессор (для будущих мини-патчей без редактирования chat.js)
+    // внешний препроцессор (без редактирования chat.js)
     try {
       if (window.Assistant?.preprocessText) {
         const res = window.Assistant.preprocessText(v);
@@ -1012,7 +1026,7 @@
 
     addMsg("user", v);
 
-    // Локальный "что сейчас играет?" — без обращения к API
+    // Локальный "что сейчас играет?"
     if (/(что\s+(сейчас\s+)?играет|что за трек|какой трек|what'?s\s+playing)/i.test(v)) {
       const np = chat.nowPlaying;
       const msg = np?.id
@@ -1031,7 +1045,8 @@
 
     // таймер авто-стоп/паузы в тексте
     const delaySpec = parseDelaySpec(v);
-    const suppressImmediatePauseStop = !!(delaySpec && (delaySpec.ms || delaySpec.afterCurrent));
+    const hasDelayWords = /(через|после\s+(этой|текущей))/i.test(v);
+    const suppressImmediatePauseStop = !!(delaySpec && (delaySpec.ms || delaySpec.afterCurrent)) || hasDelayWords;
     const forcedNext = NEXT_RE.test(v);
 
     try {
@@ -1048,10 +1063,19 @@
 
         let actions = Array.isArray(data.actions) ? data.actions : [];
 
+        // SANITIZE: если пользователь сказал «пауза», заменяем любые stop-акшены модели на pause
+        const askedPause = /\b(пауза|pause)\b/i.test(v);
+        const askedStop = /\b(стоп|выключ|останов|stop)\b/i.test(v);
+        if (askedPause && !askedStop && actions.length) {
+          actions = actions.map((a) =>
+            a?.type === "player" && a.action === "stop" ? { ...a, action: "pause" } : a
+          );
+        }
+
         if (forcedNext) {
           await nextWithGuard();
         } else if (actions.length) {
-          // CRITICAL: не делать немедленный pause/stop, если пользователь просил задержку
+          // не делать немедленный pause/stop, если просили задержку
           if (suppressImmediatePauseStop) {
             actions = actions.filter(
               (a) => !(a?.type === "player" && (a.action === "stop" || a.action === "pause"))
@@ -1176,7 +1200,7 @@
         if (id) dispatch("play", { id });
         else dispatch("play", { query: seed, exclude: recent.list(), shuffle: true });
       }
-      manualPauseGuardUntil = 0; // снимаем охрану: пользователь явно запустил воспроизведение
+      manualPauseGuardUntil = 0;
       return "Играю";
     }
 
@@ -1212,7 +1236,6 @@
       }
     }
 
-    // распознаём настроение → если без «включи», даём подсказки жанров/артистов
     const moods = [
       { re: /(весел|радіс|радост|happy|joy)/, mood: "happy" },
       { re: /(спок|calm|chill|relax)/, mood: "calm" },
@@ -1299,7 +1322,6 @@
       .filter(Boolean);
   }
 
-  // агрегаторы для голосового ввода (мик / wake)
   const micAgg = { buf: "", timer: null };
   const wakeAgg = { buf: "", timer: null };
   function debouncedPush(agg, phrase, delay = 800) {
@@ -1329,7 +1351,6 @@
     if (!isWakeOn() && !force) return;
     if (wakeActive && !force) return;
 
-    // мягкий перезапуск без лог-спама
     stopWakeLoop(true);
     try {
       const rec = new SR();
@@ -1412,7 +1433,6 @@
   if (btnMic && SR) {
     btnMic.addEventListener("click", () => {
       try {
-        // временно приостанавливаем wake
         if (isWakeOn() && wakeActive) {
           wakePausedForMic = true;
           stopWakeLoop(true);
@@ -1425,16 +1445,17 @@
         btnMic.classList.add("is-on");
 
         rec.onresult = (ev) => {
-          const t = ev.results?.[0]?.[0]?.transcript || "";
+          // Берём последний финальный результат текущей сессии
+          const t = (ev.results?.[ev.results.length - 1]?.[0]?.transcript || "");
           if (!micAgg.buf) clearTimeout(micAgg.timer);
           debouncedPush(micAgg, t, 800);
         };
+
         rec.onerror = () => {
           addMsg("bot", "Не вышло распознать голос");
         };
         rec.onend = () => {
           btnMic.classList.remove("is-on");
-          // аккуратно возобновляем wake (если включён в настройках)
           if (isWakeOn()) {
             wakePausedForMic = false;
             startWakeLoop(true);
@@ -1474,9 +1495,9 @@
   // автозапуск wake-loop, если включён
   if (SR && isWakeOn()) startWakeLoop();
 
-  // ─── лёгкие внешние хуки (для доработок без редактирования chat.js) ─
+  // ─── лёгкие внешние хуки ─────────────────────────────────────────────
   window.Assistant = window.Assistant || {};
   window.Assistant.enqueueText = (txt) => handleUserText(String(txt || ""));
   window.Assistant.nowPlaying = () => ({ ...(chat.nowPlaying || {}) });
-  // window.Assistant.preprocessText = (text) => text; // можно переопределить снаружи
+  // window.Assistant.preprocessText = (text) => text;
 })();

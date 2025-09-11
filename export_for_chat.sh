@@ -3,32 +3,32 @@ set -euo pipefail
 
 OUT="assistant_bundle_$(date +%Y%m%d_%H%M%S)"
 EXCLUDE_DIRS_REGEX='^(\.git/|node_modules/|dist/|build/|\.next/|\.cache/|coverage/|out/|target/|vendor/)'
-MAX_PER_FILE=$((200*1024))
-MAX_TOTAL=$((20*1024*1024))
+MAX_PER_FILE=$((200*1024))   # лимит на файл для CONTENTS.md
+MAX_TOTAL=$((20*1024*1024))  # общий лимит CONTENTS.md
 
-mkdir -p "$OUT/_meta"
+mkdir -p "$OUT/_meta" "$OUT/_snapshot"
 
-# Все файлы: отслеживаемые и неотслеживаемые (кроме игнорируемых)
+# 1) Все файлы: отслеживаемые и неотслеживаемые (кроме игнорируемых git'ом)
 git ls-files -co --exclude-standard > "$OUT/_meta/all_files.list"
 
-# Файлы для упаковки (без тяжёлых директорий)
+# 2) Файлы для снапшота/упаковки (без тяжёлых директорий)
 grep -Ev '^\s*$' "$OUT/_meta/all_files.list" \
   | grep -Ev "$EXCLUDE_DIRS_REGEX" \
   > "$OUT/_meta/include_files.list"
 
-# ⚠️ исключаем сам скрипт (чтобы PowerShell не ругался на lock)
+# 2a) исключаем сам скрипт
 SCRIPT_NAME="$(basename "$0")"
 grep -Ev "^${SCRIPT_NAME//\./\\.}$" "$OUT/_meta/include_files.list" > "$OUT/_meta/include_files.tmp"
 mv "$OUT/_meta/include_files.tmp" "$OUT/_meta/include_files.list"
 
-# Дерево
+# 3) Дерево
 if command -v tree >/dev/null 2>&1; then
   tree -a -I '.git' > "$OUT/PROJECT_TREE.txt" || true
 else
   { echo "# Project file list"; echo; sed 's/^/ - /' "$OUT/_meta/all_files.list"; } > "$OUT/PROJECT_TREE.txt"
 fi
 
-# MANIFEST.tsv
+# 4) MANIFEST.tsv по всем файлам (включая исключённые каталоги — только для справки)
 {
   echo -e "size_bytes\tsha1\tpath"
   while IFS= read -r f; do
@@ -39,7 +39,7 @@ fi
   done < "$OUT/_meta/all_files.list"
 } > "$OUT/MANIFEST.tsv"
 
-# BINARIES.tsv
+# 5) BINARIES.tsv среди включаемых файлов
 {
   echo -e "size_bytes\tmimetype\tpath"
   while IFS= read -r f; do
@@ -52,7 +52,7 @@ fi
   done < "$OUT/_meta/include_files.list"
 } > "$OUT/BINARIES.tsv"
 
-# CONTENTS.md (только текстовые файлы, с лимитами)
+# 6) CONTENTS.md (только текстовые, с лимитами)
 TOTAL=0
 CAT="$OUT/CONTENTS.md"
 echo "# Project contents (text files, truncated)" > "$CAT"; echo >> "$CAT"
@@ -87,16 +87,25 @@ while IFS= read -r f; do
   TOTAL=$((TOTAL + sz))
 done < "$OUT/_meta/include_files.list"
 
-# README
+# 7) СНАПШОТ файлов проекта под $OUT/_snapshot (с сохранением структуры)
+while IFS= read -r f; do
+  [ -e "$f" ] || continue
+  d="$OUT/_snapshot/$(dirname "$f")"
+  mkdir -p "$d"
+  cp -p "$f" "$OUT/_snapshot/$f"
+done < "$OUT/_meta/include_files.list"
+
+# 8) README
 cat > "$OUT/README_FOR_CHAT.md" <<EOF
 # Assistant export
 - PROJECT_TREE.txt — дерево/список файлов.
 - MANIFEST.tsv — размер/sha1/путь каждого файла.
 - BINARIES.tsv — бинарные файлы.
 - CONTENTS.md — содержимое текстовых файлов (с лимитами).
+- _snapshot/ — копия проекта (без node_modules и т.п.) для оффлайн-обзора.
 EOF
 
-# Упаковка
+# 9) Упаковка: архивируем ТОЛЬКО $OUT (без Update)
 ZIP="$OUT.zip"
 
 # Ищем 7z даже вне PATH
@@ -107,32 +116,19 @@ for cand in 7z "/c/Program Files/7-Zip/7z.exe" "/c/Program Files (x86)/7-Zip/7z.
 done
 
 if command -v zip >/dev/null 2>&1; then
-  zip -q -@ "$ZIP" < "$OUT/_meta/include_files.list"
   zip -qr "$ZIP" "$OUT"
 elif [ -n "$SEVENZ" ]; then
-  "$SEVENZ" a -tzip "$ZIP" @"$OUT/_meta/include_files.list" >/dev/null
   "$SEVENZ" a -tzip "$ZIP" "$OUT" >/dev/null
 elif command -v powershell.exe >/dev/null 2>&1; then
   WINPWD=$(pwd -W 2>/dev/null || pwd)
   powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
     \$ErrorActionPreference = 'Stop';
     Set-Location -LiteralPath '$WINPWD';
-    \$listPath = '$OUT/_meta/include_files.list';
-    if (Test-Path -LiteralPath \$listPath) {
-      \$paths = Get-Content -LiteralPath \$listPath | Where-Object { \$_ -and (Test-Path -LiteralPath \$_) };
-    } else {
-      \$paths = @();
-    }
-    if (\$paths.Count -gt 0) {
-      Compress-Archive -Path \$paths -DestinationPath '$ZIP' -Force;
-    } else {
-      if (Test-Path '$ZIP') { Remove-Item -LiteralPath '$ZIP' -Force -EA SilentlyContinue }
-      New-Item -ItemType File -Path '$ZIP' -Force | Out-Null
-    }
-    Compress-Archive -Path '$OUT' -DestinationPath '$ZIP' -Update -Force;
+    if (Test-Path -LiteralPath '$ZIP') { Remove-Item -LiteralPath '$ZIP' -Force -EA SilentlyContinue }
+    Compress-Archive -Path '$OUT' -DestinationPath '$ZIP' -Force;
   "
 else
-  echo "Нужен 'zip', '7z' или PowerShell Compress-Archive в PATH." >&2
+  echo "Нужен 'zip', '7z' или PowerShell Compress-Archive." >&2
   exit 1
 fi
 

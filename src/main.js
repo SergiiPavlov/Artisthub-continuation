@@ -1,5 +1,9 @@
 import './js/api.js';                 
-import './js/artists/index.js';       
+import './js/artists/index.js';  
+
+import './js/assistant/chat.js';
+import './js/assistant/assistant-hooks.js'; 
+
 
 import './js/header.js';
 import './js/hero.js';
