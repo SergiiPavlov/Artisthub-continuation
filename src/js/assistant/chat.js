@@ -1,5 +1,7 @@
-// Chat Friend + AI bridge with memory + Provider + Server/Browser TTS 
-// VERSION: chat.js v2.8.5 (timer fix + pause/stop suppression on delay + whats-playing intent + wake/mic coexist + mood suggestions + auto-next) — 2025-09-11
+// Chat Friend + AI bridge with memory + Provider + Server/Browser TTS
+// VERSION: chat.js v2.8.6
+// (debounced SR + manual-pause guard + local "what's playing" + wake/mic coexist + mood suggestions + auto-next)
+// — 2025-09-11
 (() => {
   if (window.__ASSISTANT_UI_INIT__) return;
   window.__ASSISTANT_UI_INIT__ = true;
@@ -42,7 +44,9 @@
     const v = (lang || "").toLowerCase();
     if (v === "ru" || v === "uk" || v === "en") {
       state.langPref = v;
-      try { localStorage.setItem("assistant.lang", v); } catch {}
+      try {
+        localStorage.setItem("assistant.lang", v);
+      } catch {}
       addMsg("note", `Язык речи закреплён: ${v.toUpperCase()}`);
     }
   }
@@ -141,7 +145,7 @@
     .assistant__mic{background:#1f2836 !important;border:1px solid #2a3a52 !important;color:#cbd5e1 !important}
     .assistant__mic.is-on{outline:2px solid #0ea5e9}
     .assistant__settings{padding:.75rem;border-top:1px solid rgba(255,255,255,.08);background:#0f1216}
-    .assistant__row{display:flex;align-items:center;gap:.5рем;margin:.45rem 0}
+    .assistant__row{display:flex;align-items:center;gap:.5rem;margin:.45rem 0}
     .assistant__row > span{min-width:150px;opacity:.85}
     .assistant__hint{opacity:.7}
     #as-voice,#as-lang{flex:1;min-width:0;padding:.45rem .55rem;border-radius:8px;background:#0b0f14;border:1px solid #263142;color:#e8f1ff}
@@ -260,7 +264,8 @@
   window.addEventListener("AM.player.track", (e) => {
     const id = e?.detail?.id || "";
     const title = String(e?.detail?.title || "");
-    let artist = "", song = "";
+    let artist = "",
+      song = "";
     const m = title.split(" - ");
     if (m.length >= 2) {
       artist = m[0].trim();
@@ -335,7 +340,9 @@
     } catch {}
   }
   if ("speechSynthesis" in window) {
-    try { window.speechSynthesis.onvoiceschanged = populateVoices; } catch {}
+    try {
+      window.speechSynthesis.onvoiceschanged = populateVoices;
+    } catch {}
     setTimeout(populateVoices, 300);
   }
   selVoice?.addEventListener("change", () => {
@@ -365,17 +372,25 @@
     const urlObj = URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
     const audio = new Audio(urlObj);
     audio.preload = "auto";
-    try { await audio.play(); } catch (e) { console.warn("[tts] play() blocked:", e); }
+    try {
+      await audio.play();
+    } catch (e) {
+      console.warn("[tts] play() blocked:", e);
+    }
     audio.onended = () => URL.revokeObjectURL(urlObj);
     audio.onerror = () => console.error("[tts] audio error:", audio.error);
   }
-  async function ttsServerSpeak(text, lang) { return speakServer(text, lang); }
+  async function ttsServerSpeak(text, lang) {
+    return speakServer(text, lang);
+  }
 
   // ─── browser TTS (strict voice match) ────────────────────────────────
   function speakBrowser(text, lang) {
     try {
       if (!("speechSynthesis" in window)) return;
-      try { window.speechSynthesis.cancel(); } catch {}
+      try {
+        window.speechSynthesis.cancel();
+      } catch {}
       const u = new SpeechSynthesisUtterance(text);
       const want = codeToBCP47(lang);
       const wantPrefix = want.slice(0, 2);
@@ -426,7 +441,16 @@
   });
 
   // === Sleep timer (helpers) ===========================================
-  let sleepTimerId = null, sleepAfterTrack = false, sleepAfterAction = "stop";
+  let sleepTimerId = null,
+    sleepAfterTrack = false,
+    sleepAfterAction = "stop";
+
+  // защита от авто-next после намеренной паузы
+  let manualPauseGuardUntil = 0; // пока > now — не авто-Next на paused
+  function markManualPauseGuard(ms = 60 * 60 * 1000) {
+    manualPauseGuardUntil = Date.now() + ms;
+  }
+
   function clearSleepTimer() {
     if (sleepTimerId) {
       clearTimeout(sleepTimerId);
@@ -438,6 +462,7 @@
     sleepTimerId = setTimeout(() => {
       if (op === "pause") {
         dispatch("player-pause");
+        markManualPauseGuard(12 * 60 * 60 * 1000); // 12 ч защиты от авто-next
         addMsg("note", "⏰ Таймер: пауза.");
       } else {
         dispatch("player-stop");
@@ -463,13 +488,15 @@
     if (sleepAfterTrack) {
       sleepAfterTrack = false;
       clearSleepTimer();
-      if (sleepAfterAction === "pause") dispatch("player-pause");
-      else dispatch("player-stop");
+      if (sleepAfterAction === "pause") {
+        dispatch("player-pause");
+        markManualPauseGuard(12 * 60 * 60 * 1000);
+      } else {
+        dispatch("player-stop");
+      }
       addMsg(
         "note",
-        sleepAfterAction === "pause"
-          ? "⏰ Пауза после текущего трека."
-          : "⏰ Остановлено после текущего трека."
+        sleepAfterAction === "pause" ? "⏰ Пауза после текущего трека." : "⏰ Остановлено после текущего трека."
       );
       return;
     }
@@ -485,9 +512,13 @@
   window.addEventListener("AM.player.state", (e) => {
     const st = String(e?.detail?.state || "").toLowerCase(); // "paused"/"stopped"/"ended"
     clearTimeout(silenceTimer);
-    if (!sleepAfterTrack && (st === "stopped" || st === "paused" || st === "ended")) {
+    if (!sleepAfterTrack && (st === "stopped" || st === "ended" || st === "paused")) {
+      // если пауза была намеренной — не «оживляем» трек
+      if (st === "paused" && Date.now() < manualPauseGuardUntil) return;
       silenceTimer = setTimeout(() => {
-        if (!sleepAfterTrack) nextWithGuard();
+        if (!sleepAfterTrack && !(st === "paused" && Date.now() < manualPauseGuardUntil)) {
+          nextWithGuard();
+        }
       }, 3000);
     }
   });
@@ -737,27 +768,97 @@
     const map = new Map(
       Object.entries({
         // RU
-        "ноль": 0, "один": 1, "одна": 1, "два": 2, "две": 2, "три": 3, "четыре": 4, "пять": 5, "шесть": 6, "семь": 7,
-        "восемь": 8, "девять": 9, "десять": 10, "одиннадцать": 11, "двенадцать": 12, "тринадцать": 13, "четырнадцать": 14,
-        "пятнадцать": 15, "шестнадцать": 16, "семнадцать": 17, "восемнадцать": 18, "девятнадцать": 19, "двадцать": 20,
-        "тридцать": 30, "сорок": 40, "пятьдесят": 50, "шестьдесят": 60, "полминуты": 30, "полчаса": 1800, "полторы": 1.5,
-        "полтора": 1.5, "несколько": 5, "пару": 2, "пара": 2,
+        "ноль": 0,
+        "один": 1,
+        "одна": 1,
+        "два": 2,
+        "две": 2,
+        "три": 3,
+        "четыре": 4,
+        "пять": 5,
+        "шесть": 6,
+        "семь": 7,
+        "восемь": 8,
+        "девять": 9,
+        "десять": 10,
+        "одиннадцать": 11,
+        "двенадцать": 12,
+        "тринадцать": 13,
+        "четырнадцать": 14,
+        "пятнадцать": 15,
+        "шестнадцать": 16,
+        "семнадцать": 17,
+        "восемнадцать": 18,
+        "девятнадцать": 19,
+        "двадцать": 20,
+        "тридцать": 30,
+        "сорок": 40,
+        "пятьдесят": 50,
+        "шестьдесят": 60,
+        "полминуты": 30,
+        "полчаса": 1800,
+        "полторы": 1.5,
+        "полтора": 1.5,
+        "несколько": 5,
+        "пару": 2,
+        "пара": 2,
         // UK (минимальный набор)
-        "нуль": 0, "дві": 2, "чотири": 4, "п’ять": 5, "вісім": 8, "дев’ять": 9, "кілька": 5, "півхвилини": 30, "півгодини": 1800,
+        "нуль": 0,
+        "дві": 2,
+        "чотири": 4,
+        "п’ять": 5,
+        "вісім": 8,
+        "дев’ять": 9,
+        "кілька": 5,
+        "півхвилини": 30,
+        "півгодини": 1800,
         // EN
-        "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
-        "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16,
-        "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60,
-        "half-minute": 30, "half an hour": 1800, "couple": 2, "few": 5,
+        "zero": 0,
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+        "nine": 9,
+        "ten": 10,
+        "eleven": 11,
+        "twelve": 12,
+        "thirteen": 13,
+        "fourteen": 14,
+        "fifteen": 15,
+        "sixteen": 16,
+        "seventeen": 17,
+        "eighteen": 18,
+        "nineteen": 19,
+        "twenty": 20,
+        "thirty": 30,
+        "forty": 40,
+        "fifty": 50,
+        "sixty": 60,
+        "half-minute": 30,
+        "half an hour": 1800,
+        "couple": 2,
+        "few": 5,
       })
     );
     if (map.has(s)) return map.get(s);
     const tokens = s.split(/[\s-]+/g).filter(Boolean);
-    let total = 0, had = false;
+    let total = 0,
+      had = false;
     for (const t of tokens) {
-      if (map.has(t)) { total += map.get(t); had = true; continue; }
+      if (map.has(t)) {
+        total += map.get(t);
+        had = true;
+        continue;
+      }
       const n = Number(t.replace(",", "."));
-      if (!Number.isNaN(n)) { total += n; had = true; }
+      if (!Number.isNaN(n)) {
+        total += n;
+        had = true;
+      }
     }
     return had ? total : null;
   }
@@ -766,16 +867,14 @@
   function parseDelaySpec(input = "") {
     const t = String(input || "").toLowerCase();
 
-    const wantsPause =
-      /(постав(ь|ить).+пауз|на пауз|пауз(а|у)\b|пауза\b|pause)/.test(t);
+    const wantsPause = /(постав(ь|ить).+пауз|на пауз|пауз(а|у)\b|пауза\b|pause)/.test(t);
     const wantsStop = /(выключ|останов|стоп\b|stop)/.test(t);
     const op = wantsPause ? "pause" : wantsStop ? "stop" : null;
 
     const afterCurrent =
       /(после\s+(этой|текущей)\s+(песни|композиции|трека)|after\s+(this|current)\s+(song|track))/.test(t);
 
-    const UNIT =
-      /(сек(?:унд[уы|оче]к)?|s|sec|seconds|мин(?:ут[ы|у])?|m|min|minutes|час(?:ов|а)?|h|hour|hours)\b/i;
+    const UNIT = /(сек(?:унд[уы|оче]к)?|s|sec|seconds|мин(?:ут[ы|у])?|m|min|minutes|час(?:ов|а)?|h|hour|hours)\b/i;
 
     // цифрами: «через 10 секунд»
     const m1 = t.match(/(?:через|за|на)\s+(\d{1,3})\s*([a-zа-яёіїє.]+)/i);
@@ -807,7 +906,8 @@
     // формат «через 1:30»
     const m3 = t.match(/(?:через|за)\s+(\d{1,2}):(\d{2})/);
     if (m3) {
-      const mm = Number(m3[1] || 0), ss = Number(m3[2] || 0);
+      const mm = Number(m3[1] || 0),
+        ss = Number(m3[2] || 0);
       const ms = (mm * 60 + ss) * 1000;
       return { ms, afterCurrent: false, op: op || "pause" };
     }
@@ -837,7 +937,9 @@
         ds.op === "pause" ? "Ок, поставлю на паузу после текущего трека." : "Ок, выключу после текущего трека."
       );
       speak(ds.op === "pause" ? "Поставлю на паузу после текущего трека" : "Выключу после текущего трека");
-      try { window.__AM_SLEEP_AFTER__ = true; } catch {}
+      try {
+        window.__AM_SLEEP_AFTER__ = true;
+      } catch {}
       return true;
     }
 
@@ -845,12 +947,18 @@
     const reThisArtist = /(хит(?:ов|ы)|лучшие|best of|hits).*(этого артиста).*(\d{1,2}.*(час|мин))/i;
     const reNamed =
       /(хит(?:ов|ы)|лучшие|best of|hits)\s+([a-zа-яёіїє .'\-]+?)\s+(?:на|в течение|напротяжении)?\s*(\d{1,2}\s*(?:час|часа|часов|мин|минут|minutes?|hours?))/i;
-    let artist = "", durStr = "";
+    let artist = "",
+      durStr = "";
     let m = text.toLowerCase().match(reThisArtist);
-    if (m && chat.nowPlaying?.artist) { artist = chat.nowPlaying.artist; durStr = m[3] || ""; }
-    else {
+    if (m && chat.nowPlaying?.artist) {
+      artist = chat.nowPlaying.artist;
+      durStr = m[3] || "";
+    } else {
       m = text.toLowerCase().match(reNamed);
-      if (m) { artist = (m[2] || "").trim(); durStr = m[3] || ""; }
+      if (m) {
+        artist = (m[2] || "").trim();
+        durStr = m[3] || "";
+      }
     }
     if (artist && durStr) {
       const ms = parseSleepDuration(durStr);
@@ -890,8 +998,17 @@
   }
 
   async function handleUserText(text) {
-    const v = String(text || "").trim();
+    let v = String(text || "").trim();
     if (!v) return;
+
+    // внешний препроцессор (для будущих мини-патчей без редактирования chat.js)
+    try {
+      if (window.Assistant?.preprocessText) {
+        const res = window.Assistant.preprocessText(v);
+        if (res && typeof res === "object" && res.handled) return;
+        if (typeof res === "string") v = res;
+      }
+    } catch {}
 
     addMsg("user", v);
 
@@ -899,11 +1016,11 @@
     if (/(что\s+(сейчас\s+)?играет|что за трек|какой трек|what'?s\s+playing)/i.test(v)) {
       const np = chat.nowPlaying;
       const msg = np?.id
-        ? (np.title
-            ? `Сейчас играет: ${np.title}`
-            : (np.artist || np.song)
-              ? `Сейчас играет: ${[np.artist, np.song].filter(Boolean).join(" - ")}`
-              : "Сейчас что-то играет.")
+        ? np.title
+          ? `Сейчас играет: ${np.title}`
+          : (np.artist || np.song)
+          ? `Сейчас играет: ${[np.artist, np.song].filter(Boolean).join(" - ")}`
+          : "Сейчас что-то играет."
         : "Сейчас ничего не играет.";
       addMsg("bot", msg);
       speak(msg);
@@ -967,11 +1084,11 @@
             clearSleepTimer();
             addMsg(
               "note",
-              sleepAfterAction === "pause"
-                ? "⏰ Пауза после текущего трека."
-                : "⏰ Выключусь после текущего трека."
+              sleepAfterAction === "pause" ? "⏰ Пауза после текущего трека." : "⏰ Выключусь после текущего трека."
             );
-            try { window.__AM_SLEEP_AFTER__ = true; } catch {}
+            try {
+              window.__AM_SLEEP_AFTER__ = true;
+            } catch {}
           }
         } else {
           const localReply = await handleCommandLocal(v, /*suppressInstant*/ suppressImmediatePauseStop);
@@ -983,11 +1100,11 @@
             clearSleepTimer();
             addMsg(
               "note",
-              sleepAfterAction === "pause"
-                ? "⏰ Пауза после текущего трека."
-                : "⏰ Выключусь после текущего трека."
+              sleepAfterAction === "pause" ? "⏰ Пауза после текущего трека." : "⏰ Выключусь после текущего трека."
             );
-            try { window.__AM_SLEEP_AFTER__ = true; } catch {}
+            try {
+              window.__AM_SLEEP_AFTER__ = true;
+            } catch {}
           }
         }
 
@@ -1032,6 +1149,7 @@
     if (!suppressInstantPauseStop && !hasDelayWords) {
       if (/\b(пауза|pause)\b/.test(text)) {
         dispatch("player-pause");
+        markManualPauseGuard(); // 1 час по умолчанию
         return "Пауза";
       }
       if (/\b(стоп|выключи|останови|stop)\b/.test(text)) {
@@ -1043,6 +1161,7 @@
     if (/(отмени|сбрось|cancel).*(таймер|timer)/.test(text)) {
       clearSleepTimer();
       sleepAfterTrack = false;
+      manualPauseGuardUntil = 0;
       return "Таймер отменён";
     }
 
@@ -1057,6 +1176,7 @@
         if (id) dispatch("play", { id });
         else dispatch("play", { query: seed, exclude: recent.list(), shuffle: true });
       }
+      manualPauseGuardUntil = 0; // снимаем охрану: пользователь явно запустил воспроизведение
       return "Играю";
     }
 
@@ -1075,6 +1195,7 @@
       const id = cQueue.take();
       if (id) dispatch("play", { id });
       else dispatch("play", { query: seed, exclude: recent.list(), shuffle: true });
+      manualPauseGuardUntil = 0;
       return "Mix Radio";
     }
 
@@ -1086,6 +1207,7 @@
         const id = cQueue.take();
         if (id) dispatch("play", { id });
         else dispatch("play", { query: like, exclude: recent.list(), shuffle: true });
+        manualPauseGuardUntil = 0;
         return "Шукаю та вмикаю…";
       }
     }
@@ -1164,7 +1286,7 @@
     return "Я тут. Могу переключать вид, управлять треком и подбирать музыку по настроению.";
   }
 
-  // ─── Mic + Wake word ─────────────────────────────────────────────────
+  // ─── Mic + Wake word (с дебаунсом результатов SR) ────────────────────
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   function isWakeOn() {
     return !!chkWake?.checked;
@@ -1177,8 +1299,27 @@
       .filter(Boolean);
   }
 
-  let wakeRec = null, wakeStopReq = false, wakeRestartTimer = null;
-  let wakePausedForMic = false, wakeActive = false, wakeLogShown = false;
+  // агрегаторы для голосового ввода (мик / wake)
+  const micAgg = { buf: "", timer: null };
+  const wakeAgg = { buf: "", timer: null };
+  function debouncedPush(agg, phrase, delay = 800) {
+    const s = String(phrase || "").trim();
+    if (!s) return;
+    agg.buf = agg.buf ? agg.buf + " " + s : s;
+    clearTimeout(agg.timer);
+    agg.timer = setTimeout(() => {
+      const payload = agg.buf.trim();
+      agg.buf = "";
+      handleUserText(payload);
+    }, delay);
+  }
+
+  let wakeRec = null,
+    wakeStopReq = false,
+    wakeRestartTimer = null;
+  let wakePausedForMic = false,
+    wakeActive = false,
+    wakeLogShown = false;
 
   async function startWakeLoop(force = false) {
     if (!SR) {
@@ -1216,7 +1357,9 @@
             addMsg("note", "[Wake] Слушаю.");
             return;
           }
-          handleUserText(cmd);
+          if (!wakeAgg.buf) clearTimeout(wakeAgg.timer);
+          debouncedPush(wakeAgg, cmd, 800);
+          return;
         }
       };
 
@@ -1283,7 +1426,8 @@
 
         rec.onresult = (ev) => {
           const t = ev.results?.[0]?.[0]?.transcript || "";
-          handleUserText(t);
+          if (!micAgg.buf) clearTimeout(micAgg.timer);
+          debouncedPush(micAgg, t, 800);
         };
         rec.onerror = () => {
           addMsg("bot", "Не вышло распознать голос");
@@ -1329,4 +1473,10 @@
 
   // автозапуск wake-loop, если включён
   if (SR && isWakeOn()) startWakeLoop();
+
+  // ─── лёгкие внешние хуки (для доработок без редактирования chat.js) ─
+  window.Assistant = window.Assistant || {};
+  window.Assistant.enqueueText = (txt) => handleUserText(String(txt || ""));
+  window.Assistant.nowPlaying = () => ({ ...(chat.nowPlaying || {}) });
+  // window.Assistant.preprocessText = (text) => text; // можно переопределить снаружи
 })();
