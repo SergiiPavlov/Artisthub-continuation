@@ -22,7 +22,8 @@
     "prepare": "husky install",
     "server": "node server/index.mjs",
     "server:watch": "node --watch server/index.mjs",
-    "all": "concurrently -n FRONT,API -c cyan,magenta \"npm:dev\" \"npm:server\""
+    "all": "concurrently -n FRONT,API -c cyan,magenta \"npm:dev\" \"npm:server\"",
+    "patch:api": "node scripts/patch-api-base.mjs"
   },
   "overrides": {
     "strip-ansi": "7.1.0"
