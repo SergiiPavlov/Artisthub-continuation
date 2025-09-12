@@ -7,9 +7,7 @@ import { API_BASE } from './apiBase.js';
   if (window.__ASSISTANT_UI_INIT__) return;
   window.__ASSISTANT_UI_INIT__ = true;
 
-  const API_BASE =
-    (import.meta?.env?.VITE_API_URL && import.meta.env.VITE_API_URL.replace(/\/+$/, "")) ||
-    (location.hostname === "localhost" ? `${API_BASE}` : "");
+
 
   // ─── helpers ─────────────────────────────────────────────────────────
   function getYouTubeId(urlOrId) {
