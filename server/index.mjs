@@ -1,8 +1,4 @@
-// server/index.mjs — server-v4.5.4-2025-09-11
-// Focus: selectable provider (Pro/OpenAI vs Free/LM Studio) via req.body.provider,
-// lang-lock, few-shots, enrich recommend→play (no forced query→id), MixRadio,
-// /api/yt/search with exclude/shuffle/cache, and TTS endpoint.
-
+// server/index.mjs — server-v4.5.4-2025-09-11 (prod-ready)
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -14,6 +10,9 @@ const app = express();
 const PORT = Number(process.env.PORT || 8787);
 const VERSION = 'server-v4.5.4-2025-09-11';
 const DEBUG_INTENT = String(process.env.DEBUG_INTENT || '') === '1';
+
+// ВАЖНО для Render/прокси, чтобы secure-cookies работали
+app.set('trust proxy', 1);
 
 // LLM configs (Pro/OpenAI vs Free/LM Studio)
 const LLM = {
@@ -39,8 +38,13 @@ app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
 
-// ─── Server TTS (Piper) ────────────────────────────────────────────────
-registerTTS(app);
+// ─── Server TTS (Piper) — условно ──────────────────────────────────────
+const ENABLE_TTS = process.env.ENABLE_TTS_SERVER !== '0' && !!process.env.PIPER_PATH;
+if (ENABLE_TTS) {
+  registerTTS(app);
+} else {
+  app.get('/api/tts/health', (_req, res) => res.json({ ok: false, disabled: true }));
+}
 
 app.get('/api/health', (_req, res) => {
   res.json({
@@ -50,6 +54,7 @@ app.get('/api/health', (_req, res) => {
       pro: { base: LLM.pro.base, model: LLM.pro.model, key_set: !!LLM.pro.key },
       free: { base: LLM.free.base, model: LLM.free.model, key_set: !!LLM.free.key },
     },
+    tts: { enabled: ENABLE_TTS },
   });
 });
 
@@ -480,8 +485,6 @@ app.post('/api/chat', async (req, res) => {
         ? 'Отвечай только по-русски. Не меняй язык при любых обстоятельствах.'
         : langHint === 'uk'
         ? 'Відповідай тільки українською. Не змінюй мову за жодних обставин.'
-        : langHint === 'en'
-        ? 'Answer only in English. Do not switch languages under any circumstances.'
         : 'Answer only in English. Do not switch languages under any circumstances.';
 
     const srvHist = memory.get(sid) || [];

@@ -1,0 +1,61 @@
+{
+  "name": "Artisthub-continuation",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "author": "Sergii Pavlov",
+  "license": "ISC",
+  "browserslist": [
+    ">=0.5%",
+    "last 2 versions",
+    "not dead"
+  ],
+  "scripts": {
+    "dev": "vite",
+        "api": "node server/index.mjs",
+    "dev:all": "npm run api & npm run dev"
+    "dev:host": "vite --host",
+    "build": "vite build",
+    "build:local": "cross-env VITE_BASE=/ vite build",
+    "preview": "vite preview",
+    "preview:local": "npm run build:local && vite preview",
+    "preview:nopurge": "cross-env NO_PURGE=1 VITE_BASE=/ vite build && vite preview",
+    "preview:nosort": "cross-env NO_MQ_SORT=1 VITE_BASE=/ vite build && vite preview",
+    "lint:js": "eslint .",
+    "lint:css": "stylelint \"src/**/*.css\"",
+    "lint:fix": "eslint . --fix",
+    "doctor": "npm run lint:js && npm run lint:css && vite build",
+    "analyze": "cross-env ANALYZE=1 vite build && node -e \"console.log('Open dist/stats.html')\""
+  },
+  "dependencies": {
+    "axios": "^1.11.0",
+    "cors": "^2.8.5",
+    "css-star-rating": "^1.3.1",
+    "dotenv": "^17.2.2",
+    "express": "^5.1.0",
+    "izitoast": "^1.4.0",
+    "openai": "^5.19.1",
+    "swiper": "^11.2.10",
+    "tui-pagination": "^3.4.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.11.0",
+    "@types/node": "^24.3.1",
+    "autoprefixer": "^10.4.20",
+    "cross-env": "^10.0.0",
+    "cssnano": "^6.1.2",
+    "eslint": "^9.11.0",
+    "glob": "^11.0.0",
+    "globals": "^15.8.0",
+    "postcss": "^8.4.41",
+    "postcss-discard-duplicates": "^6.0.3",
+    "postcss-sort-media-queries": "^5.2.0",
+    "rollup-plugin-visualizer": "^6.0.3",
+    "stylelint": "^16.8.1",
+    "stylelint-config-standard": "^36.0.0",
+    "vite": "^5.4.6",
+    "vite-plugin-full-reload": "^1.2.0",
+    "vite-plugin-html-inject": "^1.1.2",
+    "vite-plugin-purgecss": "^0.2.13"
+  }
+}
