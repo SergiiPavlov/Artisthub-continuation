@@ -1,13 +1,14 @@
-import { API_BASE } from './apiBase.js';
-// Нормализуем базовый URL API из Vite-окружения.
-// В продакшене .env.production положит сюда домен Render.
-// Локально можно не задавать — будет localhost:8787.
-
-const raw = (import.meta.env?.VITE_API_URL || '').trim();
-const base = raw.replace(/\/+$/, '');
+// src/js/assistant/apiBase.js
+// Единая точка правды для базового URL API.
+// Берём из Vite env (прод), из window.__AI_BASE__ (если задан),
+// иначе падаем на origin текущего сайта.
 
 export const API_BASE =
-  base ||
-  (location.origin.startsWith('http') ? location.origin : `${API_BASE}`);
+  (typeof import !== 'undefined' &&
+    typeof import.meta !== 'undefined' &&
+    import.meta.env &&
+    import.meta.env.VITE_AI_BASE_URL) ??
+  (typeof window !== 'undefined' ? window.__AI_BASE__ : '') ||
+  (typeof location !== 'undefined' ? location.origin : '');
 
-export const withBase = (p) => `${API_BASE}${p.startsWith('/') ? p : `/${p}`}`;
+export default API_BASE;
