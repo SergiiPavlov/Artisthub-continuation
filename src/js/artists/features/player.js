@@ -1,3 +1,4 @@
+import { API_BASE } from '../../assistant/apiBase.js';
 /* eslint-env browser */
 /* global YT */
 
@@ -84,9 +85,7 @@ function fmtTimeSec(sec) {
 }
 
 /* -------------------- Server search -------------------- */
-const API_BASE =
-  (import.meta?.env?.VITE_API_URL && import.meta.env.VITE_API_URL.replace(/\/+$/, "")) ||
-  (location.hostname === "localhost" ? "http://localhost:8787" : "");
+
 
 async function fetchYTSearchIds(q, max = 25) {
   if (!API_BASE) return [];
