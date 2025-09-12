@@ -1,0 +1,357 @@
+/* ============ Artists: Modal (очищено) ============ */
+
+.amodal[hidden] {
+  display: none !important;
+}
+
+.amodal {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  z-index: 1000;
+}
+.amodal__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+/* Диалог */
+.amodal__dialog {
+  position: relative;
+  z-index: 1;
+  background: var(--color-neutral-darkest, #0d0d0d);
+  color: var(--color-white, #fff);
+  border-radius: 16px;
+  inline-size: min(360px, calc(100vw - 48px));
+  max-block-size: 90vh;
+  overflow: auto;
+  padding: 52px 8px;
+  padding-right: clamp(20px, 2.2vw, 32px);
+  overscroll-behavior: contain;
+}
+@supports (height: 1svh) {
+  .amodal__dialog {
+    max-block-size: 90svh;
+  }
+}
+@media (min-width: 768px) {
+  .amodal__dialog {
+    inline-size: min(702px, calc(100vw - 48px));
+    padding: 64px 24px;
+    padding-right: clamp(24px, 2.2vw, 36px);
+  }
+}
+@media (min-width: 1440px) {
+  .amodal__dialog {
+    inline-size: min(1312px, calc(100vw - 96px));
+    padding: 64px;
+    padding-right: clamp(28px, 2.4vw, 40px);
+  }
+}
+
+/* Крестик */
+.amodal__close {
+  position: absolute;
+  top: 20px;
+  right: 34px;
+  inline-size: 36px;
+  block-size: 36px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--color-white, #fff);
+  font-size: 28px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 10;
+}
+.amodal__close::after {
+  content: '';
+  position: absolute;
+  inset: -10px;
+}
+@media (max-width: 767.98px) {
+  .amodal__close {
+    top: 16px;
+    right: 20px;
+  }
+}
+
+/* Контент */
+.amodal__body {
+  color: #e8e8ec;
+}
+.amodal__title {
+  margin: 0 0 16px;
+  font: 700 20px/1.3 'Epilogue', system-ui;
+  color: var(--color-white, #fff);
+  text-align: center;
+}
+@media (min-width: 768px) {
+  .amodal__title {
+    font-size: 32px;
+  }
+}
+
+.amodal__content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+@media (min-width: 1440px) {
+  .amodal__content {
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 32px;
+  }
+}
+
+.amodal__img {
+  width: 100%;
+  border-radius: 16px;
+  object-fit: cover;
+  display: block;
+}
+.amodal__info {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* метаданные */
+.am-meta {
+  display: flex;
+  gap: 16px;
+}
+.am-meta__col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 150px;
+}
+.am-meta__item {
+  display: flex;
+  flex-direction: column;
+}
+.lbl {
+  font-weight: 600;
+  color: var(--color-white, #fff);
+  line-height: 1.5;
+}
+.val {
+  color: #e8e8ec;
+}
+
+/* био */
+.am-bio .lbl {
+  margin-bottom: 8px;
+}
+.am-bio p {
+  margin: 0;
+  color: #e8e8ec;
+  line-height: 1.5;
+  max-height: calc(1.5em * 10);
+  overflow: hidden;
+}
+@media (min-width: 768px) {
+  .am-bio p {
+    max-height: calc(1.5em * 12);
+  }
+}
+@supports (-webkit-line-clamp: 1) {
+  .am-bio p {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 10;
+  }
+}
+
+/* теги */
+.am-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+.am-tags .tag {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  font-weight: 600;
+  font-size: 16px;
+}
+
+/* альбомы */
+.amodal__albums-title {
+  margin: 16px 0;
+  font: 700 24px/1.3 'Epilogue', system-ui;
+  color: var(--color-white, #fff);
+}
+.amodal__albums {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+@media (min-width: 768px) {
+  .amodal__albums {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  .amodal__albums .am-album {
+    width: calc((100% - 32px) / 2);
+  }
+}
+@media (min-width: 1440px) {
+  .amodal__albums .am-album {
+    width: calc((100% - 96px) / 4);
+  }
+}
+
+.am-album {
+  min-width: 250px;
+  background: #1e1c1f;
+  border-radius: 16px;
+  padding: 14px 11px;
+  display: flex;
+  flex-direction: column;
+}
+.am-album__title {
+  margin: 0 0 12px;
+  color: var(--color-white, #fff);
+  font-weight: 600;
+  font-size: 16px;
+}
+
+/* таблица треков */
+.tbl {
+  display: flex;
+  flex-direction: column;
+}
+.tbl .th {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 12px;
+  color: var(--color-white, #fff);
+  font-weight: 600;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.tr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  color: #e8e8ec;
+  font-size: 12px;
+}
+.tr:nth-child(2n) {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+}
+
+/* колонки */
+.th span:nth-child(1),
+.tr span:nth-child(1) {
+  flex-basis: 60%;
+}
+.th span:nth-child(2),
+.tr span:nth-child(2) {
+  flex-basis: 20%;
+  text-align: left;
+}
+.th span:nth-child(3),
+.tr span:nth-child(3) {
+  flex-basis: 10%;
+  text-align: right;
+}
+
+/* ютуб-иконка */
+.am-yt {
+  width: 24px;
+  height: 24px;
+  fill: var(--color-white, #fff);
+  display: inline-block;
+  transition: fill 0.2s ease;
+}
+a:hover .am-yt,
+a:focus .am-yt {
+  fill: var(--color-affair, #764191);
+}
+.yt-ph {
+  display: inline-block;
+  width: 24px;
+  height: 24px;
+}
+
+/* КНОПКА «ВВЕРХ» */
+.amodal__scrolltop {
+  position: fixed;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  right: 28px;
+  bottom: 58px;
+  background: rgba(10, 10, 10, 0.55);
+  border: 2px solid rgba(255, 255, 255, 0.95);
+  border-radius: 999px;
+  color: #fff;
+  font-weight: 900;
+  font-size: 28px;
+  line-height: 1;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  z-index: 1500;
+}
+.amodal__scrolltop:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.65);
+  outline-offset: 2px;
+}
+@media (max-width: 767.98px) {
+  .amodal__scrolltop {
+    right: 22px;
+    bottom: 58px;
+  }
+}
+
+/* Slim scrollbars */
+.amodal__dialog,
+.artists1 .dd__list {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.28) transparent;
+}
+.amodal__dialog::-webkit-scrollbar,
+.artists1 .dd__list::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.amodal__dialog::-webkit-scrollbar-track,
+.artists1 .dd__list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.amodal__dialog::-webkit-scrollbar-thumb,
+.artists1 .dd__list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.28);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.amodal__dialog::-webkit-scrollbar-thumb:hover,
+.artists1 .dd__list::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.42);
+}
+@media (max-width: 480px) {
+  .amodal__dialog::-webkit-scrollbar,
+  .artists1 .dd__list::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+}

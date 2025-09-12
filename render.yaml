@@ -7,9 +7,12 @@ services:
     buildCommand: npm ci
     startCommand: node server/index.mjs
     autoDeploy: true
+    healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
         value: production
+      - key: NODE_VERSION
+        value: 20.10.0
       # YouTube (опционально)
       - key: YT_API_KEY
         sync: false
@@ -20,7 +23,7 @@ services:
         sync: false
       - key: OPENAI_MODEL
         sync: false
-      # FREE (LM Studio/совместимый)
+      # FREE (LM Studio/совместимый) — для локалки, на Render можно не задавать
       - key: LMSTUDIO_BASE_URL
         sync: false
       - key: LMSTUDIO_API_KEY

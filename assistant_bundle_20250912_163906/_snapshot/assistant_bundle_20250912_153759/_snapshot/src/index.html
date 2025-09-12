@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/logo-icon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ArtistsHub | Website</title>
+
+    <!-- fonts -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Epilogue:wght@700&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- normalize -->
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/normalize/8.0.1/normalize.min.css"
+    />
+    <!-- def-styles -->
+    <link rel="stylesheet" href="./css/styles.css" />
+  </head>
+  <body>
+    <load src="./partials/header.html" icon-path="img/sprite.svg#logo" />
+
+    <main>
+      <load src="./partials/hero.html" />
+      <load src="./partials/artists.html" />
+      <load src="./partials/about.html" />
+      <load src="./partials/comments.html" />
+    </main>
+
+    <load src="./partials/footer.html" />
+    <load src="./partials/modal.html" />
+
+    <!-- ассистенту нужен стиль до появления панели -->
+    <link rel="stylesheet" href="./css/assistant/chat.css" />
+
+    <!-- ВАЖНО: убрали bridge.js, чтобы не было двойных слушателей assistant:* -->
+    <!-- <script type="module" src="./js/assistant/bridge.js"></script> -->
+
+    <!-- твой основной код сайта -->
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

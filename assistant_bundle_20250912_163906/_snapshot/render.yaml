@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: artisthub-ai
+    env: node
+    region: frankfurt
+    plan: free # можно поднять позже
+    buildCommand: npm ci
+    startCommand: node server/index.mjs
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # YouTube (опционально)
+      - key: YT_API_KEY
+        sync: false
+      # PRO (OpenAI/совместимый)
+      - key: OPENAI_BASE_URL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        sync: false
+      # FREE (LM Studio/совместимый)
+      - key: LMSTUDIO_BASE_URL
+        sync: false
+      - key: LMSTUDIO_API_KEY
+        sync: false
+      - key: LMSTUDIO_MODEL
+        sync: false
