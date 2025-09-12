@@ -2,8 +2,8 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [ clean-v1 ]   # можеш змінити на main, коли захочеш
-  workflow_dispatch:
+    branches: [main] # запускаем деплой при пуше в main
+  workflow_dispatch: # и руками можно запустить из Actions
 
 permissions:
   contents: read
@@ -11,7 +11,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: "pages"
+  group: 'pages'
   cancel-in-progress: true
 
 jobs:
@@ -25,9 +25,17 @@ jobs:
           node-version: 20
           cache: 'npm'
 
-      - run: npm ci
-      # build без змін: у нас у vite.config.js прод-база вже '/Artisthub-continuation/'
-      - run: npm run build
+      # Если есть package-lock.json — используем ci, иначе install
+      - name: Install deps
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Build
+        run: npm run build
 
       - uses: actions/upload-pages-artifact@v3
         with:
