@@ -1,3 +1,4 @@
+import { API_BASE } from './apiBase.js';
 // Chat Friend + AI bridge with memory + Provider + Server/Browser TTS
 // VERSION: chat.js v2.8.8
 // (stronger delay parser + ms validation + action sanitization + logs)
@@ -8,7 +9,7 @@
 
   const API_BASE =
     (import.meta?.env?.VITE_API_URL && import.meta.env.VITE_API_URL.replace(/\/+$/, "")) ||
-    (location.hostname === "localhost" ? "http://localhost:8787" : "");
+    (location.hostname === "localhost" ? `${API_BASE}` : "");
 
   // ─── helpers ─────────────────────────────────────────────────────────
   function getYouTubeId(urlOrId) {
