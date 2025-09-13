@@ -1,79 +1,39 @@
-// src/js/assistant/apiBase.js
-<<<<<<< HEAD
-// Рантайм-определение API_BASE без макросов/define — одинаково работает локально и на CI.
-
-function detectApiBase() {
-  try { if (typeof window !== 'undefined' && window.__API_BASE__) return String(window.__API_BASE__).replace(/\/+$/, ''); } catch {}
-
+// Runtime-only API base (никаких Vite define). Работает и на GitHub Pages, и локально.
+function pickRuntimeBase() {
+  // 1) Глобальные переменные, которые можем задать из index.html
   try {
-    const v = typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_BASE;
-    if (v) return String(v).replace(/\/+$/, '');
-  } catch {}
+    if (typeof window !== 'undefined') {
+      const g =
+        window.API_BASE ||
+        window.__API_BASE__ ||
+        window.__ASSISTANT_API_BASE__;
+      if (typeof g === 'string' && g.trim()) return g.trim();
 
-  try {
-    if (typeof location !== 'undefined') {
-      const host = String(location.hostname || '').toLowerCase();
-      if (host.endsWith('.github.io')) return 'https://artisthub-api-tbt4.onrender.com';
+      // 2) LocalStorage (на всякий случай, если кто-то сохранит вручную)
+      const ls = localStorage.getItem('assistant.apiBase') || '';
+      if (ls && ls.trim()) return ls.trim();
     }
   } catch {}
 
+  // 3) import.meta.env (актуально при dev/локальной сборке)
   try {
-    if (typeof location !== 'undefined') {
-      const host = String(location.hostname || '').toLowerCase();
-      if (host === 'localhost' || host === '127.0.0.1') return 'http://localhost:3000';
-    }
+    const v = (import.meta && import.meta.env && import.meta.env.VITE_API_BASE) || '';
+    if (v) return v;
   } catch {}
 
   return '';
 }
 
-export const API_BASE = detectApiBase();
+export const API_BASE = pickRuntimeBase();
 
-export function withBase(path) {
+/** Склеивает путь с базой API, если она задана. */
+export function withBase(path = '') {
+  const base = API_BASE || '';
   const p = String(path || '');
-  if (!API_BASE) return p;
-  if (/^https?:\/\//i.test(p)) return p;
-  const base = API_BASE.replace(/\/+$/, '');
-  const tail = p.startsWith('/') ? p : `/${p}`;
-  return `${base}${tail}`;
-}
-=======
-function readMeta(name) {
-  try { return document.querySelector(`meta[name="${name}"]`)?.content?.trim() || ""; } catch { return ""; }
-}
-function readQuery(name) {
-  try { return new URL(location.href).searchParams.get(name) || ""; } catch { return ""; }
+  if (!base) return p;
+  const cleanBase = base.replace(/\/+$/, '');
+  const cleanPath = p.startsWith('/') ? p : '/' + p.replace(/^\/+/, '');
+  return cleanBase + cleanPath;
 }
 
-export const API_BASE = (() => {
-  let v = "";
-
-  // 1) Глобал из <script> window.ASSISTANT_API_BASE="..."
-  if (typeof window !== "undefined" && window.ASSISTANT_API_BASE) v = String(window.ASSISTANT_API_BASE);
-
-  // 2) <meta name="assistant-api-base" content="...">
-  if (!v) v = readMeta("assistant-api-base");
-
-  // 3) ENV от сборщика (Vite и т.п.)
-  try {
-    // eslint-disable-next-line no-undef
-    if (!v && typeof import !== "undefined" && import.meta?.env?.VITE_API_BASE) {
-      // eslint-disable-next-line no-undef
-      v = String(import.meta.env.VITE_API_BASE || "");
-    }
-  } catch {}
-
-  // 4) ?api=... в URL (для отладки)
-  if (!v) v = readQuery("api");
-
-  return v.replace(/\/+$/, "");
-})();
-
-export function withBase(path) {
-  const p = String(path || "");
-  if (!API_BASE) return p;                 // dev без сервера — оставляем относительный
-  if (p.startsWith("http")) return p;      // внешняя ссылка
-  if (p.startsWith("/")) return API_BASE + p;
-  return API_BASE + "/" + p;
-}
->>>>>>> origin/main
+export default API_BASE;
