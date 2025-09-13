@@ -1,0 +1,9 @@
+{
+  "unreachable_js_files": [
+    "src/js/artists/lib/toast.js",
+    "src/js/footer.js",
+    "src/js/modal.js",
+    "src/js/shared/sprite.js"
+  ],
+  "note": "Dynamic imports/globals may not be detected."
+}

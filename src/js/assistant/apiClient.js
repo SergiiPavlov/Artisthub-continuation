@@ -31,9 +31,10 @@ export async function ttsSpeak({ text, lang = 'ru' }) {
   // 1) Серверный TTS (если включён на проде)
   try {
     const r = await fetch(withBase('/api/tts'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, lang }),
+         method: 'POST',
+         credentials: 'include',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify({ text, lang, voice }), // ← добавили voice
     });
     if (r.ok && r.headers.get('content-type')?.includes('audio')) {
       const blob = await r.blob();

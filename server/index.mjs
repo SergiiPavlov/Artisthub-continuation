@@ -1,4 +1,4 @@
-// server/index.mjs — server-v4.5.4-2025-09-11 (prod-ready)
+// server/index.mjs — server-v4.5.5-2025-09-13 (prod-ready)
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -8,25 +8,27 @@ import { searchIdsFallback, filterEmbeddable } from './search-fallback.mjs';
 
 const app = express();
 const PORT = Number(process.env.PORT || 8787);
-const VERSION = 'server-v4.5.4-2025-09-11';
+const VERSION = 'server-v4.5.5-2025-09-13';
 const DEBUG_INTENT = String(process.env.DEBUG_INTENT || '') === '1';
+// ⭐ Новая переменная: 1 (по умолчанию) — интенты включены; 0 — выключены
+const ASSISTANT_INTENTS = String(process.env.ASSISTANT_INTENTS || '1') !== '0';
 
 // ВАЖНО для Render/прокси, чтобы secure-cookies работали
 app.set('trust proxy', 1);
 
-// LLM configs (Pro/OpenAI vs Free/LM Studio)
+// LLM configs (Pro/OpenAI vs Free/Groq/LM Studio back-compat)
 const LLM = {
   pro: {
-    base: (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, ''),
-    key: process.env.OPENAI_API_KEY || '',
-    model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-    name: 'openai',
+    base: (process.env.PRO_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, ''),
+    key: process.env.PRO_API_KEY || process.env.OPENAI_API_KEY || '',
+    model: process.env.PRO_MODEL || process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    name: 'pro',
   },
   free: {
-    base: (process.env.LMSTUDIO_BASE_URL || 'http://127.0.0.1:1234/v1').replace(/\/+$/, ''),
-    key: process.env.LMSTUDIO_API_KEY || 'lm-studio',
-    model: process.env.LMSTUDIO_MODEL || 'qwen2.5-7b-instruct',
-    name: 'lmstudio',
+    base: (process.env.FREE_BASE_URL || process.env.LMSTUDIO_BASE_URL || 'https://api.groq.com/openai/v1').replace(/\/+$/, ''),
+    key: process.env.FREE_API_KEY || process.env.LMSTUDIO_API_KEY || 'lm-studio',
+    model: process.env.FREE_MODEL || process.env.LMSTUDIO_MODEL || 'llama-3.1-8b-instant',
+    name: 'free',
   },
 };
 
@@ -43,7 +45,9 @@ const ENABLE_TTS = process.env.ENABLE_TTS_SERVER !== '0' && !!process.env.PIPER_
 if (ENABLE_TTS) {
   registerTTS(app);
 } else {
+  // ⭐ Возвращаем пустые, но валидные ответы (чтобы не было 404)
   app.get('/api/tts/health', (_req, res) => res.json({ ok: false, disabled: true }));
+  app.get('/api/tts/voices', (_req, res) => res.json({ default: '', voices: [] }));
 }
 
 app.get('/api/health', (_req, res) => {
@@ -153,12 +157,8 @@ function normalizeAggressive(s = '') {
 /* ---------------- Вызов LLM ---------------- */
 function pickLLM(provider) {
   const want = String(provider || '').toLowerCase();
-  if (want === 'openai' || want === 'pro') {
-    return LLM.pro.key ? LLM.pro : LLM.free;
-  }
-  if (want === 'lmstudio' || want === 'free') {
-    return LLM.free;
-  }
+  if (want === 'openai' || want === 'pro') { return LLM.pro.key ? LLM.pro : LLM.free; }
+  if (want === 'lmstudio' || want === 'groq' || want === 'free') { return LLM.free; }
   // auto
   return LLM.pro.key ? LLM.pro : LLM.free;
 }
@@ -197,6 +197,39 @@ async function askLLM(messages, cfg) {
       return { reply, explain, actions };
     }
     return { reply: '', explain: '', actions: [], _error: 'no-json' };
+  } catch (e) {
+    clearTimeout(to);
+    const msg = e && e.name === 'AbortError' ? 'timeout' : String(e.message || e);
+    return { reply: '', explain: '', actions: [], _error: msg };
+  }
+}
+
+// ⭐ Простой вызов LLM без ожидания JSON — для «обычного чата»
+async function askLLMPlain(messages, cfg) {
+  const base = cfg.base;
+  const url = `${base}/chat/completions`;
+  const payload = { model: cfg.model, messages, temperature: 0.2 };
+
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), 15000);
+
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${cfg.key || 'no-key'}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: ctrl.signal,
+    });
+    clearTimeout(to);
+
+    if (!r.ok) {
+      const text = await r.text().catch(() => '');
+      return { reply: `LLM error ${r.status}`, explain: text.slice(0, 200), actions: [], _error: `HTTP ${r.status}` };
+    }
+
+    const j = await r.json().catch(() => ({}));
+    const content = j?.choices?.[0]?.message?.content ?? '';
+    return { reply: String(content).slice(0, 2000), explain: '', actions: [] };
   } catch (e) {
     clearTimeout(to);
     const msg = e && e.name === 'AbortError' ? 'timeout' : String(e.message || e);
@@ -467,16 +500,34 @@ function randomMixSeed() {
 }
 
 /* ---------------- /api/chat ---------------- */
+// ⭐ Этот маршрут теперь:
+// - принимает ИЛИ body.message+history, ИЛИ body.messages (совместимость)
+// - уважает флаг ASSISTANT_INTENTS
+// - если интенты ничего не решили, падает в «plain chat»
 app.post('/api/chat', async (req, res) => {
   const t0 = Date.now();
   try {
     const sid = getSid(req, res);
-    const userText = String(req.body?.message || '').trim();
-    const clientHist = Array.isArray(req.body?.history) ? req.body.history : [];
-    const provider = req.body?.provider; // 'openai'|'lmstudio'|undefined
+    const provider = req.body?.provider; // 'pro'|'free'|'openai'|'groq'
     const cfg = pickLLM(provider);
 
-    if (!userText) return res.json({ reply: 'Скажи, что включить.', actions: [], provider: cfg.name });
+    // 1) «чатовый» формат (messages: [{role, content}, ...]) — обходим интенты
+    const bodyMessages = Array.isArray(req.body?.messages) ? req.body.messages : null;
+    if (bodyMessages && bodyMessages.length) {
+      const result = await askLLMPlain(bodyMessages, cfg);
+      pushHistory(sid, 'user', String(bodyMessages[bodyMessages.length - 1]?.content || ''));
+      pushHistory(sid, 'assistant', result.reply || '');
+      console.log(`[chat:plain-messages] ${Date.now() - t0}ms provider=${cfg.name} err=${result._error || ''}`);
+      return res.json({ reply: result.reply || 'Готово.', explain: result.explain || '', actions: [], provider: cfg.name });
+    }
+
+    // 2) наш «короткий» формат (message + history)
+    const userText = String(req.body?.message || '').trim();
+    const clientHist = Array.isArray(req.body?.history) ? req.body.history : [];
+
+    if (!userText) {
+      return res.json({ reply: 'Скажи, что включить.', actions: [], provider: cfg.name });
+    }
 
     // Жёсткая фиксация языка от клиента (RU/UK/EN)
     const langHint = String(req.body?.langHint || '').toLowerCase();
@@ -488,18 +539,30 @@ app.post('/api/chat', async (req, res) => {
         : 'Answer only in English. Do not switch languages under any circumstances.';
 
     const srvHist = memory.get(sid) || [];
-    const combined = [...srvHist, ...clientHist.slice(-8)];
+    const combined = [...srvHist, ...clientHist.slice(-MAX_SRV_HISTORY)];
     const dedup = [];
     const seen = new Set();
     for (const m of combined) {
       const rec = { role: String(m.role || ''), content: String(m.content || '') };
       const k = JSON.stringify(rec);
-      if (!seen.has(k)) {
-        seen.add(k);
-        dedup.push(rec);
-      }
+      if (!seen.has(k)) { seen.add(k); dedup.push(rec); }
     }
 
+    // Если интенты выключены — сразу plain chat
+    if (!ASSISTANT_INTENTS) {
+      const messages = [
+        { role: 'system', content: 'Ты обычный помощник чата ArtistsHub. Отвечай кратко и по сути.' },
+        ...dedup.slice(-MAX_SRV_HISTORY),
+        { role: 'user', content: userText },
+      ];
+      const result = await askLLMPlain(messages, cfg);
+      pushHistory(sid, 'user', userText);
+      pushHistory(sid, 'assistant', result.reply || '');
+      console.log(`[chat:plain-disabled] ${Date.now() - t0}ms provider=${cfg.name} err=${result._error || ''}`);
+      return res.json({ reply: result.reply || 'Готово.', explain: result.explain || '', actions: [], provider: cfg.name });
+    }
+
+    // Иначе — прежний режим с JSON-инструкциями + эвристики
     const shots = FEWSHOTS[langHint] || FEWSHOTS.en;
     const messages = [
       { role: 'system', content: SYSTEM_CORE },
@@ -510,7 +573,7 @@ app.post('/api/chat', async (req, res) => {
       { role: 'user', content: userText },
     ];
 
-    // 1) ответ модели
+    // 1) ответ модели (ожидаем JSON)
     let data = await askLLM(messages, cfg);
 
     // 2) эвристика, если пусто
@@ -532,7 +595,20 @@ app.post('/api/chat', async (req, res) => {
       }
     }
 
-    // 4) enrichment recommend→play (как в v4.4.1), БЕЗ принудительного query→id
+    // ⭐ 4) НОВОЕ: если действий так и нет — «чистый чат» как финальный запасной путь
+    if (!Array.isArray(data.actions) || data.actions.length === 0) {
+      const plain = await askLLMPlain(
+        [
+          { role: 'system', content: 'Ты обычный помощник ArtistsHub. Отвечай кратко и дружелюбно.' },
+          ...dedup.slice(-MAX_SRV_HISTORY),
+          { role: 'user', content: userText },
+        ],
+        cfg
+      );
+      data = { reply: plain.reply || 'Готово.', explain: plain.explain || '', actions: [] };
+    }
+
+    // 5) enrichment recommend→play (как в v4.4.1)
     const actions = Array.isArray(data.actions) ? data.actions : [];
     const out = [];
 
@@ -579,33 +655,18 @@ app.post('/api/chat', async (req, res) => {
     };
 
     for (const a of actions) {
-      if (a?.type === 'mixradio') {
-        out.push({ type: 'play', id: '', query: randomMixSeed() });
-        continue;
-      }
-      if (a?.type === 'recommend' && a.like && a.autoplay) {
-        const like = ensureLikeQuery(a.like);
-        out.push({ type: 'play', id: '', query: like });
-        continue;
-      }
-      if (a?.type === 'recommend' && a.mood && a.autoplay) {
-        out.push({ type: 'play', id: '', query: ensureMoodQuery(a.mood) });
-        continue;
-      }
-      if (a?.type === 'recommend' && a.genre && a.autoplay) {
-        out.push({ type: 'play', id: '', query: ensureGenreQuery(a.genre) });
-        continue;
-      }
+      if (a?.type === 'mixradio') { out.push({ type: 'play', id: '', query: randomMixSeed() }); continue; }
+      if (a?.type === 'recommend' && a.like && a.autoplay) { out.push({ type: 'play', id: '', query: ensureLikeQuery(a.like) }); continue; }
+      if (a?.type === 'recommend' && a.mood && a.autoplay) { out.push({ type: 'play', id: '', query: ensureMoodQuery(a.mood) }); continue; }
+      if (a?.type === 'recommend' && a.genre && a.autoplay) { out.push({ type: 'play', id: '', query: ensureGenreQuery(a.genre) }); continue; }
       out.push(a);
     }
 
-    // 5) запись истории и ответ
+    // 6) запись истории и ответ
     pushHistory(sid, 'user', userText);
     pushHistory(sid, 'assistant', JSON.stringify({ reply: data.reply || replyForActions(out), actions: out }));
 
-    console.log(
-      `[chat] ${Date.now() - t0}ms  a=${out.length}  provider=${cfg.name}  err=${data._error || ''}`
-    );
+    console.log(`[chat] ${Date.now() - t0}ms  a=${out.length}  provider=${cfg.name}  err=${data._error || ''}`);
     res.json({ reply: data.reply || replyForActions(out) || 'Готово.', explain: data.explain || '', actions: out, provider: cfg.name });
   } catch (e) {
     console.error('[chat] ERROR', e);
@@ -623,3 +684,4 @@ app.listen(PORT, () => {
     `Using PRO(base=${LLM.pro.base}, model=${LLM.pro.model}, key=${LLM.pro.key ? 'set' : 'no'}) | FREE(base=${LLM.free.base}, model=${LLM.free.model})  (${VERSION})`
   );
 });
+
