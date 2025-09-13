@@ -303,10 +303,10 @@ import { API_BASE } from './apiBase.js';
     );
   });
   function providerToSend() {
-     const p = localStorage.getItem("assistant.provider") || "auto";
-     if (p === "pro")  return "openai"; // Pro = OpenAI
-     if (p === "free") return "groq";   // Free = Groq (а не lmstudio)
-     return undefined; // auto → сервер сам решит (обычно free)
+    const p = localStorage.getItem("assistant.provider") || "auto";
+    if (p === "pro") return "openai";
+    if (p === "free") return "lmstudio";
+    return undefined; // auto
   }
 
   // ─── Language select ─────────────────────────────────────────────────
