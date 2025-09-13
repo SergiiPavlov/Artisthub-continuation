@@ -50,3 +50,31 @@ video {
   max-width: 100%;
   height: auto;
 }
+
+/* === Mobile menu must overlay assistant chat === */
+
+/* когда меню открыто — поднимаем весь header поверх всего */
+.menu-open .header {
+  position: relative; /* создаёт контекст наложения */
+  z-index: 15000; /* выше, чем у ассистента (у него ~9999) */
+}
+
+/* само меню — полноэкранное перекрытие */
+.mobile-menu {
+  position: fixed; /* отрываем от потока */
+  inset: 0; /* top/right/bottom/left: 0 */
+  z-index: 15001; /* ещё на шаг выше header */
+}
+
+/* скрытое меню должно быть вообще вне потока */
+.mobile-menu[hidden] {
+  display: none !important;
+}
+
+/* пока меню открыто — чат не ловит клики и визуально приглушён */
+.menu-open .assistant {
+  pointer-events: none;
+}
+.menu-open .assistant__panel {
+  opacity: 0.25;
+}

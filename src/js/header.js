@@ -1,3 +1,5 @@
+// src/js/header.js
+
 const refs = {
   openBtn: document.querySelector('[data-menu-open]'),
   closeBtn: document.querySelector('[data-menu-close]'),
@@ -7,22 +9,53 @@ const refs = {
   header: document.querySelector('.header'),
 };
 
+const html = document.documentElement;
+
+// --- helper: мягкая «блокировка» ассистента, если нет CSS .menu-open ---
+function blockAssistant(on) {
+  const root = document.getElementById('assistant-root') || document.querySelector('.assistant');
+  if (!root) return;
+  try {
+    if (on) {
+      root.style.pointerEvents = 'none';
+      const panel = root.querySelector('.assistant__panel');
+      if (panel) panel.style.opacity = '.25';
+    } else {
+      root.style.pointerEvents = '';
+      const panel = root.querySelector('.assistant__panel');
+      if (panel) panel.style.opacity = '';
+    }
+  } catch {}
+}
+
 function openMenu() {
   if (!refs.menu) return;
   refs.menu.hidden = false;
   refs.menu.classList.add('show');
   document.body.style.overflow = 'hidden';
   refs.openBtn?.setAttribute('aria-expanded', 'true');
+
+  // Поднимаем меню над ассистентом и отключаем клики по чату
+  html.classList.add('menu-open');
+  blockAssistant(true);
 }
 
 function closeMenu() {
   return new Promise(resolve => {
-    if (!refs.menu) return resolve();
+    if (!refs.menu) {
+      html.classList.remove('menu-open');
+      blockAssistant(false);
+      return resolve();
+    }
     refs.menu.classList.remove('show');
     setTimeout(() => {
       refs.menu.hidden = true;
       document.body.style.overflow = '';
       refs.openBtn?.setAttribute('aria-expanded', 'false');
+
+      html.classList.remove('menu-open');
+      blockAssistant(false);
+
       resolve();
     }, 400);
   });
@@ -60,7 +93,7 @@ function smoothScroll(targetHref, duration = 500) {
     if (p < 1) {
       requestAnimationFrame(step);
     } else {
-      // NEW: переносим фокус на секцию, чтобы ссылка потеряла :focus
+      // переносим фокус на секцию, чтобы ссылка потеряла :focus
       el.setAttribute('tabindex', '-1');
       el.focus({ preventScroll: true });
       setTimeout(() => el.removeAttribute('tabindex'), 0);
@@ -86,6 +119,7 @@ refs.logos.forEach(logo => {
 });
 
 refs.menu?.addEventListener('click', e => {
+  // клик по подложке — закрываем
   if (e.target === refs.menu) {
     closeMenu();
   }
@@ -160,7 +194,7 @@ if (exploreBtn) {
     const el   = document.getElementById(raw) || document.getElementById(`${raw}-section`);
     if (!el) return;
 
-    // если вдруг открыт мобильный бургер — прикрываем перед скроллом
+    // если открыт мобильный бургер — прикрываем перед скроллом
     if (refs.menu?.classList.contains('show')) {
       await closeMenu();
     }
@@ -172,7 +206,7 @@ if (exploreBtn) {
     lockUntil = Date.now() + LOCK_MS;
 
     // плавный скролл с учётом высоты хедера
-    smoothScroll(href, 600); // можешь подправить длительность
+    smoothScroll(href, 600);
   });
 }
 
@@ -185,7 +219,7 @@ navLinks.forEach(a => {
     if (!href.startsWith('#')) return;
 
     e.preventDefault();
-    a.blur();                      // NEW: снимаем :focus с кликнутой ссылки
+    a.blur(); // снимаем :focus с кликнутой ссылки
 
     const raw = href.slice(1);
     const el = document.getElementById(raw) || document.getElementById(`${raw}-section`);
@@ -201,16 +235,32 @@ navLinks.forEach(a => {
 refs.links.forEach(link =>
   link.addEventListener('click', async e => {
     e.preventDefault();
-    link.blur();                   // NEW: снимаем :focus с мобильной ссылки
+    link.blur();
     const targetId = link.getAttribute('href');
     await closeMenu();
     smoothScroll(targetId);
   })
 );
 
+// Подстраховка: при загрузке проскроллим к hash с учётом шапки
 window.addEventListener('load', () => {
   applyScrollPadding();
   if (location.hash) {
     setTimeout(() => smoothScroll(location.hash), 0);
   }
+});
+
+/* ---------- OPTIONAL: открытие инструкции ассистента из меню ----------
+   Добавь в разметку ссылки класс .js-assistant-howto (и в моб. меню тоже),
+   чтобы вызывать справку.
+*/
+document.querySelectorAll('.js-assistant-howto').forEach(el => {
+  el.addEventListener('click', async (e) => {
+    e.preventDefault();
+    await closeMenu();
+    // Попросим ассистента показать модалку-инструкцию (если подписан)
+    window.dispatchEvent(new CustomEvent('assistant:howto'));
+    // и раскроем панель, если была скрыта
+    document.querySelector('.assistant__toggle')?.click();
+  });
 });

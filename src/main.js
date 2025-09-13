@@ -3,7 +3,7 @@ import './js/artists/index.js';
 
 import './js/assistant/chat.js';
 import './js/assistant/assistant-hooks.js'; 
-
+import './js/assistant/help.js';  
 
 import './js/header.js';
 import './js/hero.js';
