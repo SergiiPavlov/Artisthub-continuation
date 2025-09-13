@@ -1,0 +1,5 @@
+src/css/artists.css
+src/css/modal.css
+src/js/footer.js
+src/js/modal.js
+src/partials/modal.html
