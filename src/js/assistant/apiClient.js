@@ -1,6 +1,6 @@
 import { withBase } from './apiBase.js';
 
-/** Вспомогательный fetch с таймаутом и ретраями (для Render cold start) */
+/** Универсальный fetch с таймаутом и ретраями (помогает при «пробуждении» Render) */
 async function fetchWithRetry(url, options = {}, tries = 2, timeoutMs = 20000) {
   let lastErr;
   for (let i = 0; i < tries; i++) {
@@ -9,7 +9,7 @@ async function fetchWithRetry(url, options = {}, tries = 2, timeoutMs = 20000) {
       const t = setTimeout(() => ctrl.abort(), timeoutMs);
       const r = await fetch(url, { ...options, signal: ctrl.signal });
       clearTimeout(t);
-      // 502/503 бывают на «пробуждении»
+      // На «пробуждении» часто бывают 502/503 — пробуем повтор.
       if (r.status === 502 || r.status === 503) throw new Error(`bad_gateway_${r.status}`);
       return r;
     } catch (e) {
@@ -59,10 +59,12 @@ export async function ttsSpeak(arg1, langMaybe, third) {
   let voice = '';
 
   if (arg1 && typeof arg1 === 'object' && 'text' in arg1) {
+    // форма: ttsSpeak({ text, lang, voice })
     text = String(arg1.text || '');
     lang = String(arg1.lang || 'ru');
     voice = arg1.voice ? String(arg1.voice) : '';
   } else {
+    // форма: ttsSpeak(text, lang, voiceOrOptions)
     text = String(arg1 || '');
     lang = String(langMaybe || 'ru');
     if (typeof third === 'string') voice = third;
@@ -131,3 +133,4 @@ function toBCP47(code) {
   if (c === 'en' || c.startsWith('en')) return 'en-US';
   return c || 'ru-RU';
 }
+
