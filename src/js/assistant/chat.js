@@ -327,9 +327,33 @@ import { API_BASE } from './apiBase.js';
     addMsg("note", chkTTS.checked ? "Серверный TTS включён" : "Серверный TTS выключен");
   });
 
-  // ─── Voices list (browser) ───────────────────────────────────────────
+    // ─── Voice lists (browser vs server) ─────────────────────────────────
   const tts = { voiceName: localStorage.getItem("assistant.voice") || "" };
-  function populateVoices() {
+  async function populateServerVoices() {
+    try {
+      if (!API_BASE) throw new Error("no API");
+      const r = await fetch(`${API_BASE}/api/tts/voices`);
+      const j = await r.json();
+      const voices = Array.isArray(j?.voices) ? j.voices : [];
+      const def = String(j?.default || "");
+      selVoice.innerHTML =
+        `<option value="">Авто (${def ? def : "по языку"})</option>` +
+        voices
+          .map((v) => {
+            const name = `${String(v.lang || "").toUpperCase()} — ${v.id}`;
+            const val = v.id; // безопасно передаём только id (basename)
+            return `<option value="${val}">${name}</option>`;
+          })
+          .join("");
+      const saved = localStorage.getItem("assistant.voice.server") || "";
+      if (saved) selVoice.value = saved;
+    } catch (e) {
+      console.warn("[tts] voices:", e);
+      selVoice.innerHTML = `<option value="">Авто (по языку)</option>`;
+    }
+  }
+
+  function populateBrowserVoices() {
     try {
       const V = window.speechSynthesis?.getVoices?.() || [];
       selVoice.innerHTML =
@@ -338,16 +362,38 @@ import { API_BASE } from './apiBase.js';
       if (tts.voiceName) selVoice.value = tts.voiceName;
     } catch {}
   }
+
+  function refreshVoices() {
+    if (chkTTS?.checked) populateServerVoices();
+    else populateBrowserVoices();
+  }
+
   if ("speechSynthesis" in window) {
     try {
-      window.speechSynthesis.onvoiceschanged = populateVoices;
+      window.speechSynthesis.onvoiceschanged = () => {
+        if (!chkTTS?.checked) populateBrowserVoices();
+      };
     } catch {}
-    setTimeout(populateVoices, 300);
+    setTimeout(() => { if (!chkTTS?.checked) populateBrowserVoices(); }, 300);
+  } else {
+    setTimeout(refreshVoices, 0);
   }
+
   selVoice?.addEventListener("change", () => {
-    tts.voiceName = selVoice.value || "";
-    localStorage.setItem("assistant.voice", tts.voiceName);
+    const key = chkTTS?.checked ? "assistant.voice.server" : "assistant.voice";
+    const val = selVoice.value || "";
+    if (chkTTS?.checked) {
+      localStorage.setItem("assistant.voice.server", val);
+    } else {
+      tts.voiceName = val;
+      localStorage.setItem("assistant.voice", tts.voiceName);
+    }
     speak(sampleByLang(state.langPref));
+  });
+
+  chkTTS?.addEventListener("change", () => {
+    localStorage.setItem("assistant.tts.server", chkTTS.checked ? "1" : "0");
+    refreshVoices();
   });
 
   // ─── server TTS (buffered, explicit lang) ────────────────────────────
@@ -357,7 +403,7 @@ import { API_BASE } from './apiBase.js';
     const r = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json; charset=utf-8" },
-      body: JSON.stringify({ text, lang }),
+      body: JSON.stringify({ text, lang, voice: (selVoice?.value||'') }) ,
     });
     if (!r.ok) {
       let msg = `tts ${r.status}`;
@@ -1500,3 +1546,4 @@ import { API_BASE } from './apiBase.js';
   window.Assistant.nowPlaying = () => ({ ...(chat.nowPlaying || {}) });
   // window.Assistant.preprocessText = (text) => text;
 })();
+

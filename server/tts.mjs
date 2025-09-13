@@ -1,34 +1,28 @@
-// server/tts.mjs — v1.3.0 (2025-09-10)
-// Piper → ВРЕМЕННЫЙ WAV → отдаём клиенту (никакого stdout-аудио).
-//
-// POST /api/tts  -> audio/wav
-//   body: { text: "...", lang?: "ru"|"uk"|"en" }
-//   query:
-//     ?debug=1  — вернуть JSON-диагностику (без WAV)
-//     ?stream=1 — отдавать файл как поток (чтение с диска), иначе буфером
-//
-// .env (важное):
-//   PIPER_PATH=C:/piper/piper.exe
-//   PIPER_VOICE_RU=...onnx
-//   PIPER_VOICE_UK=...onnx
-//   PIPER_VOICE_EN=...onnx
-//   PIPER_VOICE=...onnx (fallback)
-//   PIPER_LENGTH_SCALE=1.0
-//   PIPER_NOISE_SCALE=0.50
-//   PIPER_NOISE_W=0.20
-//   PIPER_THREADS=1
+// server/tts.mjs — v1.4.0 (2025-09-12)
+// Piper TTS: список голосов + синтез WAV.
+// Совместимо с index.mjs (registerTTS(app))
 
-import { spawn } from 'child_process';
-import os from 'os';
-import path from 'path';
-import { promises as fs } from 'fs';
+import fs from 'node:fs/promises';
+import fss from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
 
-function pickLang(text = '') {
-  const t = String(text || '');
-  const hasUk  = /[ґєіїҐЄІЇ]/.test(t);
-  const hasCyr = /[\u0400-\u04FF]/.test(t);
-  if (hasUk) return 'uk';
-  if (hasCyr) return 'ru';
+function basenameSafe(p) {
+  try { return path.basename(String(p||'')); } catch { return String(p||''); }
+}
+
+function makeTempPath(prefix = 'piper-', ext = '.wav') {
+  const name = `${prefix}${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
+  return path.join(os.tmpdir(), name);
+}
+
+function pickLang(text) {
+  const t = String(text||'').toLowerCase();
+  if (/[а-яёієґ]/.test(t)) {
+    if (/[іїєґ]/.test(t)) return 'uk';
+    return 'ru';
+  }
   return 'en';
 }
 
@@ -45,123 +39,110 @@ function voiceFromEnv(lang) {
   return PIPER_VOICE || PIPER_VOICE_RU || PIPER_VOICE_EN || PIPER_VOICE_UK || '';
 }
 
-function makeTempPath(prefix = 'piper-', ext = '.wav') {
-  const name = `${prefix}${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`;
-  return path.join(os.tmpdir(), name);
+function listVoicesFromEnv() {
+  const out = [];
+  const push = (lang, p) => {
+    if (!p) return;
+    out.push({ id: basenameSafe(p), lang, path: p });
+  };
+  push('ru', process.env.PIPER_VOICE_RU);
+  push('uk', process.env.PIPER_VOICE_UK);
+  push('en', process.env.PIPER_VOICE_EN);
+  // fallback/дефолт
+  const def = process.env.PIPER_VOICE || out[0]?.path || '';
+  return { default: basenameSafe(def), voices: out };
+}
+
+function resolveVoice(requested) {
+  const req = String(requested||'').trim();
+  if (!req) return '';
+  // Безопасность: разрешаем только пути, указанные в ENV.
+  const cand = [
+    process.env.PIPER_VOICE_RU,
+    process.env.PIPER_VOICE_UK,
+    process.env.PIPER_VOICE_EN,
+    process.env.PIPER_VOICE,
+  ].filter(Boolean);
+  const byId = cand.find(p => basenameSafe(p) === req);
+  if (byId) return byId;
+  // если прислали полный путь — сверяем на точное совпадение
+  if (cand.includes(req)) return req;
+  return '';
 }
 
 export function registerTTS(app) {
-  const PIPER_PATH = process.env.PIPER_PATH || 'C:/piper/piper.exe';
+  const PIPER_PATH = process.env.PIPER_PATH || 'piper';
   const LENGTH  = String(process.env.PIPER_LENGTH_SCALE || '1.0');
   const NOISE   = String(process.env.PIPER_NOISE_SCALE  || '0.50');
   const NOISE_W = String(process.env.PIPER_NOISE_W      || '0.20');
   const THREADS = String(process.env.PIPER_THREADS      || '1');
 
+  // Список доступных голосов (из ENV)
+  app.get('/api/tts/voices', (_req, res) => {
+    const v = listVoicesFromEnv();
+    res.json(v);
+  });
+
+  // Health с краткой диагностикой
+  app.get('/api/tts/health', async (_req, res) => {
+    const v = listVoicesFromEnv();
+    res.json({
+      ok: !!process.env.PIPER_PATH && (v.voices.length > 0 || !!process.env.PIPER_VOICE),
+      path: PIPER_PATH,
+      voices: v,
+    });
+  });
+
+  // Синтез (возвращаем audio/wav)
   app.post('/api/tts', async (req, res) => {
-    const q = req.query || {};
-    const debug  = String(q.debug || '').toLowerCase() === '1';
-    const stream = String(q.stream || '').toLowerCase() === '1';
-
-    const text = String(req.body?.text || '').trim();
-  
-       const lang =
-      (String(req.body?.lang || '').trim() ||
-       String((req.query?.lang || '')).trim() ||
-       pickLang(text));
-
-
-    if (!text) return res.status(400).json({ error: 'no_text' });
-
-    const model = voiceFromEnv(lang);
-    if (!model) return res.status(500).json({ error: 'no_voice_model' });
-
-    const outFile = makeTempPath('piper-', '.wav'); // временный WAV
-    let stderrBuf = '';
-
     try {
+      const text = String(req.body?.text || '').trim();
+      if (!text) return res.status(400).json({ error: 'no_text' });
+
+      const langParam = String(req.body?.lang || req.query?.lang || '').trim().toLowerCase();
+      const lang = langParam || pickLang(text);
+
+      const voiceReq = String(req.body?.voice || '').trim();
+      const model = voiceReq ? resolveVoice(voiceReq) : voiceFromEnv(lang);
+      if (!model) return res.status(500).json({ error: 'no_voice_model' });
+
+      const outFile = makeTempPath('piper-', '.wav');
       const args = [
         '--quiet',
         '-m', model,
-        '-f', outFile,                // ← ПИШЕМ В ФАЙЛ
+        '-f', outFile,
         '--length_scale', LENGTH,
-        '--noise_scale', NOISE,
-        '--noise_w', NOISE_W,
-        '-t', THREADS,
+        '--noise_scale',  NOISE,
+        '--noise_w',      NOISE_W,
       ];
+      if (+THREADS > 1) { args.push('--threads', String(THREADS)); }
 
-      const child = spawn(PIPER_PATH, args, { stdio: ['pipe', 'ignore', 'pipe'] });
-
-      child.stderr.on('data', d => { stderrBuf += d.toString('utf8'); });
-      child.on('error', e => {
-        if (!res.headersSent) res.status(500).json({ error: 'spawn_error', message: String(e) });
+      const p = spawn(PIPER_PATH, args);
+      let stderrBuf = '';
+      p.stderr.on('data', (d) => { stderrBuf += String(d); });
+      p.on('error', (e) => {
+        res.status(500).json({ error: 'spawn_failed', detail: String(e) });
       });
-
-      // Текст в stdin (с переводом строки)
-      const input = text.endsWith('\n') ? text : (text + '\n');
-      child.stdin.write(input);
-      child.stdin.end();
-
-      // Ждём завершения Piper
-      await new Promise((resolve) => child.once('close', () => resolve()));
-
-      // DEBUG-режим: просто отдадим инфо
-      if (debug) {
-        let size = 0;
-        try {
-          const st = await fs.stat(outFile);
-          size = st.size | 0;
-        } catch {}
-        if (!res.headersSent) {
-          res.status(200).json({
-            ok: size > 44, lang, model,
-            file_size: size,
-            note: 'WAV written to temp; not returned because debug=1',
-            log: stderrBuf,
-          });
+      p.on('close', async (code) => {
+        if (code !== 0) {
+          return res.status(500).json({ error: 'piper_exit', code, log: stderrBuf.slice(-2000) });
         }
-        try { await fs.unlink(outFile); } catch {}
-        return;
-      }
-
-      // Проверка файла
-      const stat = await fs.stat(outFile).catch(() => null);
-      if (!stat || !stat.size || stat.size < 44) {
-        if (!res.headersSent) res.status(500).json({ error: 'empty_output', log: stderrBuf });
-        try { await fs.unlink(outFile); } catch {}
-        return;
-      }
-
-      res.setHeader('Content-Type', 'audio/wav');
-      res.setHeader('Cache-Control', 'no-store');
-
-      if (stream) {
-        // отдать как поток с диска
-        res.setHeader('Content-Length', String(stat.size));
-        const file = await fs.open(outFile, 'r');
-        const streamR = file.createReadStream();
-        streamR.pipe(res);
-        streamR.on('close', async () => {
-          try { await file.close(); } catch {}
-          try { await fs.unlink(outFile); } catch {}
-        });
-        streamR.on('error', async () => {
-          if (!res.writableEnded) { try { res.end(); } catch {} }
-          try { await file.close(); } catch {}
-          try { await fs.unlink(outFile); } catch {}
-        });
-      } else {
-        // буфером
-        const buf = await fs.readFile(outFile);
-        res.setHeader('Content-Length', String(buf.length));
-        res.end(buf);
-        try { await fs.unlink(outFile); } catch {}
-      }
-
+        try {
+          res.setHeader('content-type', 'audio/wav');
+          const stream = fss.createReadStream(outFile);
+          stream.pipe(res);
+          stream.on('close', () => { try { fss.unlink(outFile, () => {}); } catch {} });
+        } catch (e) {
+          res.status(500).json({ error: 'read_failed', detail: String(e) });
+        }
+      });
+      // Текст в stdin
+      try {
+        p.stdin.write(text);
+        p.stdin.end();
+      } catch {}
     } catch (e) {
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'server_error', message: String(e), log: stderrBuf });
-      }
-      try { await fs.unlink(outFile); } catch {}
+      res.status(500).json({ error: 'tts_failed', detail: String(e) });
     }
   });
 }
