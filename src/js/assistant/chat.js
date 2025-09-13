@@ -1,4 +1,6 @@
 import { API_BASE } from './apiBase.js';
+import { warmupBackend } from '../api/warmup.js';
+
 // Chat Friend + AI bridge with memory + Provider + Server/Browser TTS
 // VERSION: chat.js v2.8.8
 // (stronger delay parser + ms validation + action sanitization + logs)
@@ -6,8 +8,6 @@ import { API_BASE } from './apiBase.js';
 (() => {
   if (window.__ASSISTANT_UI_INIT__) return;
   window.__ASSISTANT_UI_INIT__ = true;
-
-
 
   // ─── helpers ─────────────────────────────────────────────────────────
   function getYouTubeId(urlOrId) {
@@ -150,6 +150,9 @@ import { API_BASE } from './apiBase.js';
     #as-voice,#as-lang{flex:1;min-width:0;padding:.45rem .55rem;border-radius:8px;background:#0b0f14;border:1px solid #263142;color:#e8f1ff}
   `;
   document.head.appendChild(style);
+
+  // ─── warmup backend on start (баннер + экспоненциальные повторы) ─────
+  try { warmupBackend(API_BASE, { banner: true, maxTries: 6 }); } catch {}
 
   // refs
   const panel = root.querySelector(".assistant__panel");
@@ -327,7 +330,7 @@ import { API_BASE } from './apiBase.js';
     addMsg("note", chkTTS.checked ? "Серверный TTS включён" : "Серверный TTS выключен");
   });
 
-    // ─── Voice lists (browser vs server) ─────────────────────────────────
+  // ─── Voice lists (browser vs server) ─────────────────────────────────
   const tts = { voiceName: localStorage.getItem("assistant.voice") || "" };
   async function populateServerVoices() {
     try {
@@ -1016,7 +1019,7 @@ import { API_BASE } from './apiBase.js';
       m = text.toLowerCase().match(reNamed);
       if (m) {
         artist = (m[2] || "").trim();
-        durStr = m[3] || "";
+        durStr = (m[3] || "").trim();
       }
     }
     if (artist && durStr) {
@@ -1039,10 +1042,29 @@ import { API_BASE } from './apiBase.js';
     return false;
   }
 
-  // ─── API ─────────────────────────────────────────────────────────────
+  // ─── API (с автоповтором) ────────────────────────────────────────────
+  async function fetchWithRetry(url, options = {}, tries = 2) {
+    let lastErr;
+    for (let i = 0; i < tries; i++) {
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 20000);
+        const r = await fetch(url, { ...options, signal: ctrl.signal });
+        clearTimeout(t);
+        // 502/503 часто бывают на «пробуждении»
+        if (r.status === 502 || r.status === 503) throw new Error(`bad_gateway_${r.status}`);
+        return r;
+      } catch (e) {
+        lastErr = e;
+        if (i < tries - 1) await new Promise(res => setTimeout(res, 2000 * (i + 1)));
+      }
+    }
+    throw lastErr;
+  }
+
   async function callAI(message) {
     if (!API_BASE) return null;
-    const r = await fetch(`${API_BASE}/api/chat`, {
+    const r = await fetchWithRetry(`${API_BASE}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1051,7 +1073,7 @@ import { API_BASE } from './apiBase.js';
         provider: providerToSend(),
         langHint: state.langPref,
       }),
-    });
+    }, 2);
     if (!r.ok) throw new Error(`API ${r.status}`);
     return r.json();
   }
@@ -1546,4 +1568,3 @@ import { API_BASE } from './apiBase.js';
   window.Assistant.nowPlaying = () => ({ ...(chat.nowPlaying || {}) });
   // window.Assistant.preprocessText = (text) => text;
 })();
-
