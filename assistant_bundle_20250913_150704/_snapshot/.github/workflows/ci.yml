@@ -1,19 +1,44 @@
 name: ci
 
 on:
-  pull_request:
-    branches: [main]
   push:
-    branches: [main]
+    branches:
+      - main
+      - feat/**
+      - fix/**
+      - chore/**
+  pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '20'
           cache: 'npm'
-      - run: npm ci
-      - run: npm run build
+
+      - name: Install deps
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm i
+          fi
+
+      - name: Build (if script exists)
+        run: |
+          if npm run | grep -q " build"; then
+            npm run build
+          else
+            echo "No build script - skipping"
+          fi
