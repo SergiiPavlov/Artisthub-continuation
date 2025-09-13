@@ -1,4 +1,6 @@
 import { API_BASE } from './apiBase.js';
+import { warmupBackend } from '../api/warmup.js';
+
 // Chat Friend + AI bridge with memory + Provider + Server/Browser TTS
 // VERSION: chat.js v2.8.8
 // (stronger delay parser + ms validation + action sanitization + logs)
@@ -6,8 +8,6 @@ import { API_BASE } from './apiBase.js';
 (() => {
   if (window.__ASSISTANT_UI_INIT__) return;
   window.__ASSISTANT_UI_INIT__ = true;
-
-
 
   // ─── helpers ─────────────────────────────────────────────────────────
   function getYouTubeId(urlOrId) {
@@ -150,6 +150,9 @@ import { API_BASE } from './apiBase.js';
     #as-voice,#as-lang{flex:1;min-width:0;padding:.45rem .55rem;border-radius:8px;background:#0b0f14;border:1px solid #263142;color:#e8f1ff}
   `;
   document.head.appendChild(style);
+
+  // ─── warmup backend on start (баннер + экспоненциальные повторы) ─────
+  try { warmupBackend(API_BASE, { banner: true, maxTries: 6 }); } catch {}
 
   // refs
   const panel = root.querySelector(".assistant__panel");
@@ -303,10 +306,10 @@ import { API_BASE } from './apiBase.js';
     );
   });
   function providerToSend() {
-     const p = localStorage.getItem("assistant.provider") || "auto";
-     if (p === "pro")  return "openai"; // Pro = OpenAI
-     if (p === "free") return "groq";   // Free = Groq (а не lmstudio)
-     return undefined; // auto → сервер сам решит (обычно free)
+    const p = localStorage.getItem("assistant.provider") || "auto";
+    if (p === "pro") return "openai";
+    if (p === "free") return "lmstudio";
+    return undefined; // auto
   }
 
   // ─── Language select ─────────────────────────────────────────────────
@@ -327,9 +330,33 @@ import { API_BASE } from './apiBase.js';
     addMsg("note", chkTTS.checked ? "Серверный TTS включён" : "Серверный TTS выключен");
   });
 
-  // ─── Voices list (browser) ───────────────────────────────────────────
+  // ─── Voice lists (browser vs server) ─────────────────────────────────
   const tts = { voiceName: localStorage.getItem("assistant.voice") || "" };
-  function populateVoices() {
+  async function populateServerVoices() {
+    try {
+      if (!API_BASE) throw new Error("no API");
+      const r = await fetch(`${API_BASE}/api/tts/voices`);
+      const j = await r.json();
+      const voices = Array.isArray(j?.voices) ? j.voices : [];
+      const def = String(j?.default || "");
+      selVoice.innerHTML =
+        `<option value="">Авто (${def ? def : "по языку"})</option>` +
+        voices
+          .map((v) => {
+            const name = `${String(v.lang || "").toUpperCase()} — ${v.id}`;
+            const val = v.id; // безопасно передаём только id (basename)
+            return `<option value="${val}">${name}</option>`;
+          })
+          .join("");
+      const saved = localStorage.getItem("assistant.voice.server") || "";
+      if (saved) selVoice.value = saved;
+    } catch (e) {
+      console.warn("[tts] voices:", e);
+      selVoice.innerHTML = `<option value="">Авто (по языку)</option>`;
+    }
+  }
+
+  function populateBrowserVoices() {
     try {
       const V = window.speechSynthesis?.getVoices?.() || [];
       selVoice.innerHTML =
@@ -338,16 +365,38 @@ import { API_BASE } from './apiBase.js';
       if (tts.voiceName) selVoice.value = tts.voiceName;
     } catch {}
   }
+
+  function refreshVoices() {
+    if (chkTTS?.checked) populateServerVoices();
+    else populateBrowserVoices();
+  }
+
   if ("speechSynthesis" in window) {
     try {
-      window.speechSynthesis.onvoiceschanged = populateVoices;
+      window.speechSynthesis.onvoiceschanged = () => {
+        if (!chkTTS?.checked) populateBrowserVoices();
+      };
     } catch {}
-    setTimeout(populateVoices, 300);
+    setTimeout(() => { if (!chkTTS?.checked) populateBrowserVoices(); }, 300);
+  } else {
+    setTimeout(refreshVoices, 0);
   }
+
   selVoice?.addEventListener("change", () => {
-    tts.voiceName = selVoice.value || "";
-    localStorage.setItem("assistant.voice", tts.voiceName);
+    const key = chkTTS?.checked ? "assistant.voice.server" : "assistant.voice";
+    const val = selVoice.value || "";
+    if (chkTTS?.checked) {
+      localStorage.setItem("assistant.voice.server", val);
+    } else {
+      tts.voiceName = val;
+      localStorage.setItem("assistant.voice", tts.voiceName);
+    }
     speak(sampleByLang(state.langPref));
+  });
+
+  chkTTS?.addEventListener("change", () => {
+    localStorage.setItem("assistant.tts.server", chkTTS.checked ? "1" : "0");
+    refreshVoices();
   });
 
   // ─── server TTS (buffered, explicit lang) ────────────────────────────
@@ -357,7 +406,7 @@ import { API_BASE } from './apiBase.js';
     const r = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json; charset=utf-8" },
-      body: JSON.stringify({ text, lang }),
+      body: JSON.stringify({ text, lang, voice: (selVoice?.value||'') }) ,
     });
     if (!r.ok) {
       let msg = `tts ${r.status}`;
@@ -970,7 +1019,7 @@ import { API_BASE } from './apiBase.js';
       m = text.toLowerCase().match(reNamed);
       if (m) {
         artist = (m[2] || "").trim();
-        durStr = m[3] || "";
+        durStr = (m[3] || "").trim();
       }
     }
     if (artist && durStr) {
@@ -993,10 +1042,29 @@ import { API_BASE } from './apiBase.js';
     return false;
   }
 
-  // ─── API ─────────────────────────────────────────────────────────────
+  // ─── API (с автоповтором) ────────────────────────────────────────────
+  async function fetchWithRetry(url, options = {}, tries = 2) {
+    let lastErr;
+    for (let i = 0; i < tries; i++) {
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 20000);
+        const r = await fetch(url, { ...options, signal: ctrl.signal });
+        clearTimeout(t);
+        // 502/503 часто бывают на «пробуждении»
+        if (r.status === 502 || r.status === 503) throw new Error(`bad_gateway_${r.status}`);
+        return r;
+      } catch (e) {
+        lastErr = e;
+        if (i < tries - 1) await new Promise(res => setTimeout(res, 2000 * (i + 1)));
+      }
+    }
+    throw lastErr;
+  }
+
   async function callAI(message) {
     if (!API_BASE) return null;
-    const r = await fetch(`${API_BASE}/api/chat`, {
+    const r = await fetchWithRetry(`${API_BASE}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1005,7 +1073,7 @@ import { API_BASE } from './apiBase.js';
         provider: providerToSend(),
         langHint: state.langPref,
       }),
-    });
+    }, 2);
     if (!r.ok) throw new Error(`API ${r.status}`);
     return r.json();
   }
