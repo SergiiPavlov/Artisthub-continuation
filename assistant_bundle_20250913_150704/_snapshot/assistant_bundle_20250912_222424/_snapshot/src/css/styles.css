@@ -1,0 +1,52 @@
+/**
+  |============================
+  | include css partials with
+  | default @import url()
+  |============================
+*/
+/* Common styles */
+@import url('./reset.css');
+@import url('./base.css');
+@import url('./container.css');
+
+/* Sections style */
+@import url('./hero.css');
+@import url('./artists/index.css');
+@import url('./header.css');
+@import url('./about.css');
+@import url('./comments.css');
+@import url('./footer.css');
+
+/* Тёмные скроллы повсюду */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2a3040 #0f1115; /* FF */
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+} /* Chrome/Edge */
+*::-webkit-scrollbar-track {
+  background: #0f1115;
+}
+*::-webkit-scrollbar-thumb {
+  background: #2a3040;
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #3a4358;
+}
+
+/* На всякий случай — без горизонтального перелива */
+html,
+body {
+  overflow-x: hidden;
+}
+
+/* Если внезапно появится вертикальный «микропротечка» от 1px:
+   убрать возможные 100vw-переливы от вложенных блоков */
+img,
+video {
+  max-width: 100%;
+  height: auto;
+}

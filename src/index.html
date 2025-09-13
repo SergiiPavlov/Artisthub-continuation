@@ -2,11 +2,25 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/logo-icon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ArtistsHub | Website</title>
 
+    <!-- API base для ассистента (GH Pages -> Render) -->
+    <meta
+      name="assistant-api-base"
+      content="https://artisthub-api-tbt4.onrender.com"
+    />
+    <script>
+      // Дублируем мету в глобал на случай, если сборщик "съест" <meta>
+      window.ASSISTANT_API_BASE = 'https://artisthub-api-tbt4.onrender.com';
+    </script>
+
+    <!-- favicon: относительный путь, чтобы не отваливался на GitHub Pages -->
+    <link rel="icon" type="image/svg+xml" href="./logo-icon.svg" />
+
     <!-- fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&display=swap"
       rel="stylesheet"
@@ -21,8 +35,12 @@
       rel="stylesheet"
       href="https://cdnjs.cloudflare.com/ajax/libs/normalize/8.0.1/normalize.min.css"
     />
+
     <!-- def-styles -->
     <link rel="stylesheet" href="./css/styles.css" />
+
+    <!-- ассистенту нужен стиль до появления панели -->
+    <link rel="stylesheet" href="./css/assistant/chat.css" />
   </head>
   <body>
     <load src="./partials/header.html" icon-path="img/sprite.svg#logo" />
@@ -37,13 +55,14 @@
     <load src="./partials/footer.html" />
     <load src="./partials/modal.html" />
 
-    <!-- ассистенту нужен стиль до появления панели -->
-    <link rel="stylesheet" href="./css/assistant/chat.css" />
-
-    <!-- ВАЖНО: убрали bridge.js, чтобы не было двойных слушателей assistant:* -->
+    <!-- ВАЖНО: bridge.js оставляем выключенным, чтобы не было дублей событий -->
     <!-- <script type="module" src="./js/assistant/bridge.js"></script> -->
 
-    <!-- твой основной код сайта -->
+    <!-- основной код сайта (в нём/через сборку подключается chat.js) -->
     <script type="module" src="./main.js"></script>
+
+    <noscript>
+      Для полной работы страницы и голосового ассистента нужен JavaScript.
+    </noscript>
   </body>
 </html>

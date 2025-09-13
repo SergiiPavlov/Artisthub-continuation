@@ -1,9 +1,19 @@
 // src/js/assistant/apiBase.js
-const raw = (import.meta.env?.VITE_API_URL || '').trim();
-const base = raw.replace(/\/+$/, '');
+export function withBase(path) {
+  const p = String(path || '');
+  if (/^https?:\/\//i.test(p)) return p;
 
-export const API_BASE =
-  base || (location.hostname === 'localhost' ? 'http://localhost:8787' : '');
+  let base = '';
+  try {
+    base =
+      (typeof document !== 'undefined'
+        ? document.querySelector('meta[name="assistant-api-base"]')?.content
+        : '') ||
+      (typeof window !== 'undefined' ? window.ASSISTANT_API_BASE : '') ||
+      '';
+  } catch {}
 
-export default API_BASE;
+  if (!base) return p;
+  return base.replace(/\/+$/, '') + (p.startsWith('/') ? p : `/${p}`);
+}
 
