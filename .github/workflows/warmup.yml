@@ -1,0 +1,22 @@
+name: Warmup Render (every 30 min)
+
+on:
+  schedule:
+    - cron: '*/30 * * * *' # каждые 30 минут (UTC)
+  workflow_dispatch:
+
+concurrency:
+  group: warmup-render
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Curl health and root with retries
+        run: |
+          URL="https://artisthub-api-tbt4.onrender.com"
+          # без set -e; ошибки игнорируем через || true
+          curl -fsSL -m 20 --retry 3 --retry-connrefused "$URL/api/health" >/dev/null || true
+          curl -fsSL -m 20 --retry 3 --retry-connrefused "$URL/"           >/dev/null || true
