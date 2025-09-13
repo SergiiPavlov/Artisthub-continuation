@@ -1,39 +1,39 @@
-// src/js/assistant/apiBase.js
-function readMeta(name) {
-  try { return document.querySelector(`meta[name="${name}"]`)?.content?.trim() || ""; } catch { return ""; }
-}
-function readQuery(name) {
-  try { return new URL(location.href).searchParams.get(name) || ""; } catch { return ""; }
-}
-
-export const API_BASE = (() => {
-  let v = "";
-
-  // 1) Глобал из <script> window.ASSISTANT_API_BASE="..."
-  if (typeof window !== "undefined" && window.ASSISTANT_API_BASE) v = String(window.ASSISTANT_API_BASE);
-
-  // 2) <meta name="assistant-api-base" content="...">
-  if (!v) v = readMeta("assistant-api-base");
-
-  // 3) ENV от сборщика (Vite и т.п.)
+// Runtime-only API base (никаких Vite define). Работает и на GitHub Pages, и локально.
+function pickRuntimeBase() {
+  // 1) Глобальные переменные, которые можем задать из index.html
   try {
-    // eslint-disable-next-line no-undef
-    if (!v && typeof import !== "undefined" && import.meta?.env?.VITE_API_BASE) {
-      // eslint-disable-next-line no-undef
-      v = String(import.meta.env.VITE_API_BASE || "");
+    if (typeof window !== 'undefined') {
+      const g =
+        window.API_BASE ||
+        window.__API_BASE__ ||
+        window.__ASSISTANT_API_BASE__;
+      if (typeof g === 'string' && g.trim()) return g.trim();
+
+      // 2) LocalStorage (на всякий случай, если кто-то сохранит вручную)
+      const ls = localStorage.getItem('assistant.apiBase') || '';
+      if (ls && ls.trim()) return ls.trim();
     }
   } catch {}
 
-  // 4) ?api=... в URL (для отладки)
-  if (!v) v = readQuery("api");
+  // 3) import.meta.env (актуально при dev/локальной сборке)
+  try {
+    const v = (import.meta && import.meta.env && import.meta.env.VITE_API_BASE) || '';
+    if (v) return v;
+  } catch {}
 
-  return v.replace(/\/+$/, "");
-})();
-
-export function withBase(path) {
-  const p = String(path || "");
-  if (!API_BASE) return p;                 // dev без сервера — оставляем относительный
-  if (p.startsWith("http")) return p;      // внешняя ссылка
-  if (p.startsWith("/")) return API_BASE + p;
-  return API_BASE + "/" + p;
+  return '';
 }
+
+export const API_BASE = pickRuntimeBase();
+
+/** Склеивает путь с базой API, если она задана. */
+export function withBase(path = '') {
+  const base = API_BASE || '';
+  const p = String(path || '');
+  if (!base) return p;
+  const cleanBase = base.replace(/\/+$/, '');
+  const cleanPath = p.startsWith('/') ? p : '/' + p.replace(/^\/+/, '');
+  return cleanBase + cleanPath;
+}
+
+export default API_BASE;
