@@ -9,7 +9,9 @@
   transform: translate(-50%, 12px);
   opacity: 0;
   pointer-events: none;
-  transition: transform 160ms ease, opacity 160ms ease;
+  transition:
+    transform 160ms ease,
+    opacity 160ms ease;
 }
 .am-player--active {
   transform: translateY(0) translateX(-50%);
@@ -105,8 +107,14 @@
   background: rgba(0, 0, 0, 0.45);
   color: #fff;
   text-decoration: none;
-  font: 600 12px/1 'IBM Plex Sans', system-ui, -apple-system, Segoe UI, Roboto,
-    Arial, sans-serif;
+  font:
+    600 12px/1 'IBM Plex Sans',
+    system-ui,
+    -apple-system,
+    Segoe UI,
+    Roboto,
+    Arial,
+    sans-serif;
 }
 .am-player__ytlink:hover {
   background: rgba(0, 0, 0, 0.6);
@@ -156,7 +164,12 @@
 /* Время */
 .am-player__time {
   color: #fff;
-  font: 500 13px/1.2 system-ui, -apple-system, Segoe UI, Roboto, Arial,
+  font:
+    500 13px/1.2 system-ui,
+    -apple-system,
+    Segoe UI,
+    Roboto,
+    Arial,
     sans-serif;
 }
 
@@ -259,7 +272,9 @@
   opacity: 0;
   pointer-events: none;
   transform: translate(-50%, 8px) scale(0.985);
-  transition: transform 160ms ease, opacity 160ms ease;
+  transition:
+    transform 160ms ease,
+    opacity 160ms ease;
 }
 
 /* ====== Пузырь ====== */
@@ -281,7 +296,8 @@
 
   color: var(--color-white, #fff);
   background: var(--color-affair, #764191);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35),
+  box-shadow:
+    0 12px 28px rgba(0, 0, 0, 0.35),
     inset 0 0 0 1px rgba(255, 255, 255, 0.1);
 
   --amp: 1.06;
@@ -289,7 +305,9 @@
   animation: am-bubble-breathe var(--bpmDur) ease-in-out infinite;
 }
 .am-player__bubble .note {
-  font: 700 18px/1 'IBM Plex Sans', system-ui;
+  font:
+    700 18px/1 'IBM Plex Sans',
+    system-ui;
   transform: translateY(-1px);
 }
 .am-player__bubble::before,
@@ -428,4 +446,16 @@
 }
 .am-player--min.am-player--patch-applied .am-player__bubble {
   pointer-events: auto;
+}
+
+/* мягкий «почти fullscreen», если API недоступен (iOS Safari для страниц) */
+.app--fullscreen .am-player,
+.app--fullscreen #root,
+.app--fullscreen body {
+  overflow: hidden;
+}
+.app--fullscreen .am-player {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
 }

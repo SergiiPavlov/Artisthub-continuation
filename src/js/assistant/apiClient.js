@@ -49,7 +49,7 @@ export async function ttsSpeak(arg1, langMaybe, third) {
 
   if (!text) return false;
 
-  // 1) Серверный TTS
+  // 1) Серверный TTS (если доступен): принимаем только audio/*
   try {
     const r = await fetch(withBase(`/api/tts?lang=${encodeURIComponent(lang)}`), {
       method: 'POST',
@@ -58,18 +58,29 @@ export async function ttsSpeak(arg1, langMaybe, third) {
       body: JSON.stringify(voice ? { text, lang, voice } : { text, lang }),
     });
 
-    if (r.ok && String(r.headers.get('content-type') || '').includes('audio')) {
+    const ct = (r.headers.get('content-type') || '').toLowerCase();
+    if (r.ok && (ct.includes('audio/') || ct.includes('octet-stream'))) {
       const blob = await r.blob();
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
       audio.preload = 'auto';
-      try { await audio.play(); } catch {}
-      audio.onended = () => URL.revokeObjectURL(url);
-      audio.onerror = () => URL.revokeObjectURL(url);
-      return true;
+
+      // Если у тебя есть анлокер — прогрей аудио-контекст перед play()
+      if (typeof window.__ensureAudioUnlocked === 'function') {
+        await window.__ensureAudioUnlocked();
+      }
+
+      try {
+        await audio.play(); // ВАЖНО: ждём; если заблокировано — упадём в catch и пойдём на браузерный TTS
+        audio.onended = () => URL.revokeObjectURL(url);
+        audio.onerror = () => URL.revokeObjectURL(url);
+        return true; // серверный TTS успешно озвучил → всё, выходим
+      } catch (e) {
+        URL.revokeObjectURL(url); // не сыграло — попробуем браузерный TTS
+      }
     }
   } catch {
-    // серверного TTS нет/упал → пойдём в браузер
+    // сервер не ответил/вернул не-аудио — пойдём в браузерный TTS
   }
 
   // 2) Браузерный TTS (fallback)
@@ -88,6 +99,7 @@ export async function ttsSpeak(arg1, langMaybe, third) {
 
   return false;
 }
+
 
 function toBCP47(code) {
   const c = String(code || '').toLowerCase();
