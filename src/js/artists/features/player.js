@@ -3,18 +3,13 @@ import { API_BASE } from '../../assistant/apiBase.js';
 /* global YT */
 
 /**
- * Mini YouTube player (superset, v2.3.6)
+ * Mini YouTube player (superset, v2.4.0)
  *
- * Что нового vs 2.3.5:
- * - Больше не передаём videoId в конструктор, если его нет (фикс "Invalid video id").
- * - Не передаём playerVars.origin, если origin === "null"/file://.
- * - В searchMode используем host https://www.youtube.com (а не nocookie) — стабильнее для listType:"search".
- * - Таймер прогресса работает без проверки ready; duration подтягивается на PLAYING.
- * - При переключении loadVideoById() не сбивает ready, не пересоздаёт iframe лишний раз.
- * - Autoplay helper: на старте делаем soft-автозапуск через mute→play, с безопасными повторными попытками.
- * - Stuck-guard: если PLAYING, но прогресс «не едет» — форсируем next(); ротация запросов в searchMode.
- * - Smart next: для одиночного видео без очереди — ре-поиск по артисту.
- * - Глобалка window.Player для консоли.
+ * Новое vs 2.3.6:
+ * - Кнопка Fullscreen под «×», с правильным z-index.
+ * - Синхронизация состояния кнопки по fullscreenchange и CSS-фоллбэку.
+ * - Выход из полноэкранного при Close.
+ * - Безопасная диспетчеризация assistant:fullscreen/exit-fullscreen.
  */
 
 let _instance = null;
@@ -23,7 +18,6 @@ let _instance = null;
 function dbg(...a) {
   try {
     if (typeof window !== 'undefined' && window.__AM_DEBUG__ === true) {
-      // eslint-disable-next-line no-console
       console.log('[player]', ...a);
     }
   } catch {}
@@ -85,8 +79,6 @@ function fmtTimeSec(sec) {
 }
 
 /* -------------------- Server search -------------------- */
-
-
 async function fetchYTSearchIds(q, max = 25) {
   if (!API_BASE) return [];
   try {
@@ -118,6 +110,9 @@ export function createMiniPlayer() {
       <div class="am-player__dragzone" aria-hidden="true" title="Drag the player"></div>
       <button class="am-player__hide" type="button" aria-label="Hide">Hide</button>
       <button class="am-player__close" type="button" aria-label="Close">×</button>
+
+      <!-- Fullscreen button (under Close) -->
+      <button class="am-player__fs" type="button" aria-label="Fullscreen" title="Fullscreen" data-fullscreen-btn>⤢</button>
 
       <div class="am-player__frame">
         <div class="am-player__host" id="am-player-host"></div>
@@ -161,10 +156,11 @@ export function createMiniPlayer() {
   const tDur     = dock.querySelector(".am-player__dur");
   const dragzone = dock.querySelector(".am-player__dragzone");
   const aYTlink  = dock.querySelector(".am-player__ytlink");
+  const btnFS    = dock.querySelector(".am-player__fs");
 
   /* ---------- state ---------- */
   let yt = null;
-  let ready = false;            // логический ready экземпляра
+  let ready = false;
   let duration = 0;
   let timer = null;
   let muted = false;
@@ -175,10 +171,8 @@ export function createMiniPlayer() {
   let qi = -1;
   let loop = false;
 
-  // searchMode — при фоллбэке на YT search playlist
   let searchMode = false;
 
-  // анти-зацикливание / stuck-control
   let lastVidId = null;
   let sameIdPlays = 0;
   let lastQuery = '';
@@ -187,7 +181,6 @@ export function createMiniPlayer() {
   let lastProgressT = 0;
   let lastProgressV = 0;
 
-  // autoplay helper
   let autoplayTimer = null;
 
   const DOCK_KEY = "amPlayerPos";
@@ -428,7 +421,6 @@ export function createMiniPlayer() {
       try {
         const st = yt?.getPlayerState?.();
         if (st !== YT.PlayerState.PLAYING) {
-          // soft-автостарт: mute → play
           const wasMuted = yt?.isMuted?.() || false;
           yt?.mute?.();
           yt?.playVideo?.();
@@ -442,21 +434,12 @@ export function createMiniPlayer() {
   function skipWithDelay(ms = 2000) { setTimeout(autoNext, ms); }
 
   function currentHostForMode() {
-    // searchMode требует обычный youtube-хост
     return searchMode ? "https://www.youtube.com" : "https://www.youtube-nocookie.com";
   }
 
   function safePlayerVars(hasInitialId) {
-    const pv = {
-      rel: 0,
-      modestbranding: 1,
-      controls: 1,
-      enablejsapi: 1
-    };
-    // autoplay в конструкторе — только если есть валидный id
+    const pv = { rel: 0, modestbranding: 1, controls: 1, enablejsapi: 1 };
     if (hasInitialId) pv.autoplay = 1;
-
-    // origin не указываем на file:// и "null"
     try {
       const isFile = location.protocol === 'file:' || location.origin === 'null';
       if (!isFile) pv.origin = location.origin;
@@ -467,7 +450,6 @@ export function createMiniPlayer() {
   async function ensureYT(initialVideoId) {
     await loadYTAPI();
 
-    // Если уже есть плеер, но хост не совпадает с нужным для режима — пересоздадим
     const needHost = currentHostForMode();
     const mustRecreate = !yt || !yt?.getIframe || (() => {
       try {
@@ -514,19 +496,12 @@ export function createMiniPlayer() {
             emit("state", { state: e.data });
 
             if (e.data === YT.PlayerState.PLAYING) {
-              clearWatchdog();
-              clearSearchWatch();
-              clearStuckGuard();
-              clearAutoplayTimer();
-              uiPlayIcon(true);
-              setBubblePulse(true);
-              // duration часто инициализируется только тут
-              const d = yt.getDuration?.() || 0;
-              if (d > 0) duration = d;
+              clearWatchdog(); clearSearchWatch(); clearStuckGuard(); clearAutoplayTimer();
+              uiPlayIcon(true); setBubblePulse(true);
+              const d = yt.getDuration?.() || 0; if (d > 0) duration = d;
               startTimer();
               try {
-                const url = yt.getVideoUrl?.();
-                if (url) aYTlink.href = url;
+                const url = yt.getVideoUrl?.(); if (url) aYTlink.href = url;
                 const vd = yt.getVideoData?.();
                 if (vd && vd.video_id) {
                   emit("track", { id: vd.video_id, title: vd.title || "" });
@@ -535,63 +510,40 @@ export function createMiniPlayer() {
                 hydrateFromYTPlaylist();
               } catch {}
             } else if (e.data === YT.PlayerState.PAUSED) {
-              uiPlayIcon(false);
-              setBubblePulse(false);
-              clearTimer();
-              emit("pause", {});
+              uiPlayIcon(false); setBubblePulse(false); clearTimer(); emit("pause", {});
             } else if (e.data === YT.PlayerState.ENDED) {
-              uiPlayIcon(false);
-              setBubblePulse(false);
-              clearTimer();
-              clearWatchdog();
-              clearStuckGuard();
-              clearAutoplayTimer();
+              uiPlayIcon(false); setBubblePulse(false);
+              clearTimer(); clearWatchdog(); clearStuckGuard(); clearAutoplayTimer();
               emit("ended", {});
               if (window.__AM_SLEEP_AFTER__) {
                 try { window.__AM_SLEEP_AFTER__ = false; } catch {}
-                stop();
-                return;
+                stop(); return;
               }
               autoNext();
             }
           },
-          // ⬇⬇⬇ ИЗМЕНЕНО: обработка ошибок с мгновенным skip для embed-кодов 2/5/100/101/150
           onError: (e) => {
             const code = (e && (e.data ?? e.code)) ?? 0;
             emit("error", { code });
             dbg('YT error', code, e);
-            uiPlayIcon(false);
-            setBubblePulse(false);
-            clearTimer();
-            clearWatchdog();
-            clearSearchWatch();
-            clearStuckGuard();
-            clearAutoplayTimer();
+            uiPlayIcon(false); setBubblePulse(false);
+            clearTimer(); clearWatchdog(); clearSearchWatch(); clearStuckGuard(); clearAutoplayTimer();
 
-            // Эти коды почти всегда означают "невстраиваемо/заблокировано"
             if ([2, 5, 100, 101, 150].includes(code)) {
-              try {
-                if (searchMode) { yt?.nextVideo?.(); } else { next(); }
-              } catch {
-                skipWithDelay(0);
-              }
+              try { if (searchMode) { yt?.nextVideo?.(); } else { next(); } }
+              catch { skipWithDelay(0); }
               return;
             }
-
-            // Прочие ошибки — мягкий skip с небольшой задержкой
             skipWithDelay(1200);
           }
-          // ▲▲▲ КОНЕЦ ИЗМЕНЕНИЙ
         }
       };
-      // Добавляем videoId ТОЛЬКО если он валидный
       if (initialVideoId && /^[\w-]{11}$/.test(initialVideoId)) {
         cfg.videoId = initialVideoId;
         cfg.playerVars.autoplay = 1;
       }
       yt = new YT.Player("am-player-yt", cfg);
     } else {
-      // Плеер уже подходящий — просто убедимся что ready и таймер крутится
       ready = true;
       startTimer();
       tryAutoplaySoft();
@@ -602,7 +554,6 @@ export function createMiniPlayer() {
   async function playByIndex(idx, opts = {}) {
     if (!queue.length) return;
 
-    // Явный переход по индексам — это локальная очередь → выключаем searchMode
     searchMode = false;
 
     qi = clamp(idx, 0, queue.length - 1);
@@ -623,7 +574,7 @@ export function createMiniPlayer() {
 
     duration = 0; clearTimer(); clearWatchdog(); clearStuckGuard(); clearAutoplayTimer();
     try {
-      await ensureYT(null); // НЕ передаём videoId здесь, будем грузить loadVideoById
+      await ensureYT(null);
       ready = true;
       yt.loadVideoById({ videoId: id });
       tryAutoplaySoft();
@@ -661,6 +612,7 @@ export function createMiniPlayer() {
     let pos = null;
     try { pos = JSON.parse(localStorage.getItem(DOCK_KEY) || "null"); } catch {}
     if (pos && Number.isFinite(pos.left) && Number.isFinite(pos.top)) {
+      const r = dock.getBoundingClientRect();
       dock.classList.add("am-player--free");
       dock.style.transform = "none";
       dock.style.left = `${pos.left}px`;
@@ -718,10 +670,26 @@ export function createMiniPlayer() {
   window.visualViewport?.addEventListener("resize", clampDock);
   window.addEventListener("orientationchange", clampDock);
 
+  /* ---------- Fullscreen helpers ---------- */
+  function isFs() {
+    return !!(document.fullscreenElement || document.webkitFullscreenElement
+      || document.documentElement.classList.contains('assistant-fs-doc')); // CSS fallback
+  }
+  function syncFsButton() {
+    // кнопку просто показываем всегда; здесь можно менять иконку, если захочешь
+    // например: btnFS.textContent = isFs() ? "⤡" : "⤢";
+  }
+  document.addEventListener("fullscreenchange", syncFsButton);
+  document.addEventListener("webkitfullscreenchange", syncFsButton);
+  document.addEventListener("assistant:fs-change", syncFsButton); // шлёт fullscreen.js для CSS-фоллбэка
+
   /* ---------- Buttons ---------- */
   btnClose.addEventListener("click", () => {
     try { yt?.stopVideo?.(); yt?.destroy?.(); } catch {}
-    yt = null; ready = false; duration = 0; clearTimer(); clearWatchdog(); clearSearchWatch(); clearStuckGuard(); clearAutoplayTimer();
+    yt = null; ready = false; duration = 0;
+    clearTimer(); clearWatchdog(); clearSearchWatch(); clearStuckGuard(); clearAutoplayTimer();
+    // выйти из FS, если активен
+    try { document.dispatchEvent(new CustomEvent("assistant:exit-fullscreen", { bubbles: true, composed: true })); } catch {}
     uiShow(false); uiMin(false);
     queue = []; qi = -1;
     searchMode = false;
@@ -729,6 +697,12 @@ export function createMiniPlayer() {
     setBubblePulse(false);
   });
   btnHide.addEventListener("click", () => { uiMin(true); });
+
+  // Fullscreen по клику (есть user gesture → стабильно)
+  btnFS?.addEventListener("click", (e) => {
+  e.preventDefault();
+  document.dispatchEvent(new CustomEvent("assistant:fullscreen-toggle", { bubbles: true, composed: true }));
+  });  
 
   aYTlink.addEventListener("click", () => {
     try { yt?.stopVideo?.(); yt?.destroy?.(); } catch {}
@@ -884,7 +858,6 @@ export function createMiniPlayer() {
 
     lastQuery = q; variantIndex = 0; sameIdPlays = 0; lastVidId = null;
 
-    // 1) Серверный поиск с кэшем и фильтрами
     const ids = await fetchYTSearchIds(q, 25);
     if (ids.length > 1) {
       await openQueue(ids, { shuffle: false, startIndex: 0 });
@@ -894,7 +867,6 @@ export function createMiniPlayer() {
       return;
     }
 
-    // 2) Фоллбэк — встроенный поисковый плейлист YouTube
     searchMode = true;
     queue = []; qi = -1;
     await ensureYT(null);
@@ -953,7 +925,6 @@ const Player = {
 
 export default Player;
 
-// Глобалка для консоли и внешних скриптов
 if (typeof window !== 'undefined') { window.Player = Player; }
 
 
