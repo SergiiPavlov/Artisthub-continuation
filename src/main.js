@@ -12,6 +12,8 @@ import './js/assistant/chat.js';
 import './js/assistant/audioUnlocker.js';
 import './js/assistant/wakeFocus.js';
 import './js/assistant/fullscreen.js';
+import './js/assistant/longform.js';
+
 
 import './js/header.js';
 import './js/hero.js';
