@@ -459,3 +459,43 @@
   inset: 0;
   z-index: 9998;
 }
+
+.am-player__fs {
+  position: absolute;
+  top: 8px;
+  right: 44px;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: #e8f1ff;
+  border-radius: 8px;
+  padding: 0.2rem 0.45rem;
+  cursor: pointer;
+}
+.am-player__fs:hover {
+  border-color: rgba(255, 255, 255, 0.45);
+}
+
+/* чтобы абсолютные кнопки позиционировались изнутри */
+.am-player__inner {
+  position: relative;
+}
+
+/* кнопка Fullscreen (под Close) */
+.am-player__fs {
+  position: absolute;
+  top: 48px; /* ниже верхнего ряда с Hide/× */
+  right: 8px; /* выровнена с Close */
+  z-index: 5; /* поверх iframe */
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: #e8f1ff;
+  border-radius: 8px;
+  padding: 0.2rem 0.45rem;
+  cursor: pointer;
+}
+.am-player__fs:hover {
+  border-color: rgba(255, 255, 255, 0.45);
+}
+
+/* Если используешь тёмный заголовочный бар — по вкусу: */
+/* .am-player__close{ z-index:6; } */
