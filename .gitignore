@@ -55,6 +55,9 @@ lpt7
 lpt8
 lpt9
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> 86cd102 (feat(assistant): fullscreen voice commands + Help modal (EN); mobile menu overlay; minor fixes)
 
 assistant_bundle_*/
