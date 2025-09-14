@@ -29,6 +29,23 @@
     document.documentElement.classList.toggle("list-view", !!isList);
   });
 
+   // Fullscreen on/off (десктоп/андроид; на iOS для страницы стандартного fullscreen нет)
+document.addEventListener("assistant:fullscreen", () => {
+  const el = document.documentElement;
+  if (document.fullscreenElement) return;
+  if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
+  else document.body.classList.add("app--fullscreen"); // мягкий CSS-фоллбэк
+});
+
+document.addEventListener("assistant:exit-fullscreen", () => {
+  if (document.fullscreenElement && document.exitFullscreen) {
+    document.exitFullscreen().catch(() => {});
+  } else {
+    document.body.classList.remove("app--fullscreen");
+  }
+});
+
+
   // Прямой запуск по ID/URL (если ассистент прислал конкретную песню)
   document.addEventListener("assistant:play", (e) => {
     const id = e?.detail?.id;

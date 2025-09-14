@@ -778,9 +778,11 @@ import { warmupBackend } from '../api/warmup.js';
         const id = cQueue.take();
         if (id) dispatch("play", { id });
         else dispatch("play", { query: seed, exclude: recent.list(), shuffle: true });
-      } else if (a?.type === "ui" && a.action) {
-        if (a.action === "minimize") dispatch("minimize");
-        else if (a.action === "expand") dispatch("expand");
+       } else if (a?.type === "ui" && a.action) {
+         if (a.action === "minimize") dispatch("minimize");
+         else if (a.action === "expand") dispatch("expand");
+         else if (a.action === "fullscreen") dispatch("fullscreen");
+         else if (a.action === "exit-fullscreen") dispatch("exit-fullscreen");
       } else if (a?.type === "play" && (a.id || a.query)) {
         if (a.query) {
           chat.lastQuery = a.query;
@@ -1236,6 +1238,17 @@ import { warmupBackend } from '../api/warmup.js';
       return "Предыдущий трек";
     }
 
+    // Полноэкранный режим
+    if (/(полный экран|на весь экран|fullscreen|full screen)/i.test(text)) {
+      dispatch("fullscreen");
+     return "Разворачиваю на весь экран";
+    }
+    if (/(выйди из полного|сверни экран|exit full|exit fullscreen|windowed)/i.test(text)) {
+      dispatch("exit-fullscreen");
+     return "Свернула из полного экрана";
+    }
+
+
     // Мгновенные pause/stop — только если НЕ просили задержку
     if (!suppressInstantPauseStop && !hasDelayWords) {
       if (/\b(пауза|pause)\b/.test(text)) {
@@ -1567,4 +1580,10 @@ import { warmupBackend } from '../api/warmup.js';
   window.Assistant.enqueueText = (txt) => handleUserText(String(txt || ""));
   window.Assistant.nowPlaying = () => ({ ...(chat.nowPlaying || {}) });
   // window.Assistant.preprocessText = (text) => text;
+   // управляем wake-loop снаружи:
+ window.Assistant.wake = {
+   enable: () => { try { startWakeLoop(true); } catch {} },
+   disable: () => { try { stopWakeLoop(true); } catch {} },
+   isOn: () => { try { return !!chkWake?.checked; } catch { return false; } }
+ };
 })();
