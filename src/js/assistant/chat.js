@@ -2,9 +2,9 @@ import { API_BASE } from './apiBase.js';
 import { warmupBackend } from '../api/warmup.js';
 
 // Chat Friend + AI bridge with memory + Provider + Server/Browser TTS
-// VERSION: chat.js v2.8.8
-// (stronger delay parser + ms validation + action sanitization + logs)
-// — 2025-09-11
+// VERSION: chat.js v2.8.9
+// (manual next/prev guards; prev voice guard)
+// — 2025-09-14
 (() => {
   if (window.__ASSISTANT_UI_INIT__) return;
   window.__ASSISTANT_UI_INIT__ = true;
@@ -576,6 +576,33 @@ import { warmupBackend } from '../api/warmup.js';
         }
       }, 3000);
     }
+  });
+
+  // ─── ГАРДЫ для ручных стрелок плеера ─────────────────────────────────
+  // Если пользователь кликает "вперёд", а ID не сменился — применяем nextWithGuard()
+  window.addEventListener("AM.player.next", async () => {
+    const before = chat.nowPlaying?.id || "";
+    setTimeout(async () => {
+      const cur = chat.nowPlaying?.id || "";
+      if (!cur || cur === before) {
+        await nextWithGuard();
+      }
+    }, 600);
+  });
+
+  // Если пользователь кликает "назад", а плеер вернул тот же ID — ставим реальный предыдущий из недавних
+  window.addEventListener("AM.player.prev", () => {
+    const before = chat.nowPlaying?.id || "";
+    setTimeout(() => {
+      const cur = chat.nowPlaying?.id || "";
+      if (!cur || cur === before) {
+        const arr = recent.list();
+        const prevId = arr.length >= 2 ? arr[arr.length - 2] : "";
+        if (prevId && prevId !== before) {
+          dispatch("play", { id: prevId });
+        }
+      }
+    }, 600);
   });
 
   // ─── log/history ─────────────────────────────────────────────────────
@@ -1234,20 +1261,31 @@ import { warmupBackend } from '../api/warmup.js';
     }
 
     if (/prev|пред/.test(text)) {
+      const before = chat.nowPlaying?.id || "";
       dispatch("player-prev");
+      // Гард: если плеер вернул тот же ID — пробуем реальный предыдущий из недавних
+      setTimeout(() => {
+        const cur = chat.nowPlaying?.id || "";
+        if (!cur || cur === before) {
+          const arr = recent.list();
+          const prevId = arr.length >= 2 ? arr[arr.length - 2] : "";
+          if (prevId && prevId !== before) {
+            dispatch("play", { id: prevId });
+          }
+        }
+      }, 600);
       return "Предыдущий трек";
     }
 
     // Полноэкранный режим
     if (/(полный экран|на весь экран|fullscreen|full screen)/i.test(text)) {
       dispatch("fullscreen");
-     return "Разворачиваю на весь экран";
+      return "Разворачиваю на весь экран";
     }
     if (/(выйди из полного|сверни экран|exit full|exit fullscreen|windowed)/i.test(text)) {
       dispatch("exit-fullscreen");
-     return "Свернула из полного экрана";
+      return "Свернула из полного экрана";
     }
-
 
     // Мгновенные pause/stop — только если НЕ просили задержку
     if (!suppressInstantPauseStop && !hasDelayWords) {
@@ -1580,10 +1618,10 @@ import { warmupBackend } from '../api/warmup.js';
   window.Assistant.enqueueText = (txt) => handleUserText(String(txt || ""));
   window.Assistant.nowPlaying = () => ({ ...(chat.nowPlaying || {}) });
   // window.Assistant.preprocessText = (text) => text;
-   // управляем wake-loop снаружи:
- window.Assistant.wake = {
-   enable: () => { try { startWakeLoop(true); } catch {} },
-   disable: () => { try { stopWakeLoop(true); } catch {} },
-   isOn: () => { try { return !!chkWake?.checked; } catch { return false; } }
- };
+  // управляем wake-loop снаружи:
+  window.Assistant.wake = {
+    enable: () => { try { startWakeLoop(true); } catch {} },
+    disable: () => { try { stopWakeLoop(true); } catch {} },
+    isOn: () => { try { return !!chkWake?.checked; } catch { return false; } }
+  };
 })();

@@ -1,5 +1,5 @@
 // src/js/assistant/longform.js
-import Player from '../player/Player.js';
+import Player from '../artists/features/player.js';
 import { API_BASE } from './apiBase.js';
 
 // эвристики для длинных запросов
