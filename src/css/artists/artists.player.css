@@ -497,5 +497,43 @@
   border-color: rgba(255, 255, 255, 0.45);
 }
 
-/* Если используешь тёмный заголовочный бар — по вкусу: */
-/* .am-player__close{ z-index:6; } */
+/* === FULLSCREEN FIT for ultrawide / short-height displays (contain 16:9) === */
+:root.assistant-fs-doc .assistant-fs,
+.am-player:fullscreen,
+.app--fullscreen .am-player {
+  /* контейнер уже на весь экран */
+}
+
+:root.assistant-fs-doc .assistant-fs .am-player__inner,
+.am-player:fullscreen .am-player__inner,
+.app--fullscreen .am-player__inner {
+  position: relative;
+  display: grid;
+  place-items: center;
+  inline-size: 100vw; /* ширина */
+  block-size: 100vh; /* высота */
+  border-radius: 0;
+  box-shadow: none;
+  background: #000;
+}
+
+:root.assistant-fs-doc .assistant-fs .am-player__frame,
+.am-player:fullscreen .am-player__frame,
+.app--fullscreen .am-player__frame {
+  /* contain: сохраняем всё видео в кадре без обрезки */
+  inline-size: min(100vw, 177.7778vh); /* 16/9 * vh */
+  block-size: min(56.25vw, 100vh); /* 9/16 * vw */
+  margin: 0 auto;
+}
+
+:root.assistant-fs-doc .assistant-fs .am-player__bar,
+.am-player:fullscreen .am-player__bar,
+.app--fullscreen .am-player__bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding-bottom: env(safe-area-inset-bottom, 0);
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0));
+  z-index: 6;
+}

@@ -3,6 +3,7 @@ import { warmupBackend } from '../api/warmup.js';
 
 // Chat Friend + AI bridge with memory + Provider + Server/Browser TTS
 // VERSION: chat.js v2.8.9
+// build tag: chat_pro_longform_v3_SAFE_FIXED (no IIFE, no redeclare)
 // (manual next/prev guards; prev voice guard)
 // — 2025-09-14
 (() => {
@@ -624,6 +625,94 @@ import { warmupBackend } from '../api/warmup.js';
     }
   }
 
+// === PRO: Suggestions rendering & picking (safe) ===
+const __RU_ORD = { 'перв':1, 'втор':2, 'трет':3, 'четв':4, 'пят':5, 'шест':6, 'седьм':7, 'восьм':8, 'девят':9, 'десят':10 };
+function __fmtDur(sec){ sec = Math.max(0, Math.round(Number(sec)||0)); const h=(sec/3600)|0; const m=((sec%3600)/60)|0; return h?`${h}:${String(m).padStart(2,'0')}`:`${m} мин`; }
+function __addSuggestList(items, opts={type:'movie'}){
+  try{
+    if (!window.chat) window.chat = {};
+    window.chat.proLastSuggest = Array.isArray(items)? items.slice(0): [];
+    const wrap = document.createElement('div');
+    wrap.className='assistant__cards';
+    wrap.style.margin='8px 0 10px'; wrap.style.display='grid'; wrap.style.gap='8px';
+    wrap.style.gridTemplateColumns='repeat(auto-fill,minmax(240px,1fr))';
+    (items||[]).forEach((x,idx)=>{
+      const card = document.createElement('div');
+      card.className='assistant__card'; card.style.padding='10px'; card.style.border='1px solid #333'; card.style.borderRadius='10px'; card.style.background='#111';
+      const t = document.createElement('div');
+      t.style.fontWeight='600'; t.style.marginBottom='6px'; t.textContent = `${idx+1}. ${x.title || 'Без названия'}`;
+      const meta = document.createElement('div');
+      meta.style.opacity='0.8'; meta.style.fontSize='12px'; meta.style.marginBottom='8px';
+      const metaText = [];
+      if (x.durationSec) metaText.push(__fmtDur(x.durationSec));
+      if (x.author) metaText.push(x.author);
+      meta.textContent = metaText.join(' · ');
+      const row = document.createElement('div');
+      row.style.display='flex'; row.style.gap='8px';
+      const btnPlay = document.createElement('button');
+      btnPlay.textContent='▶ Играть'; btnPlay.className='assistant__btn';
+      btnPlay.style.padding='6px 10px'; btnPlay.style.borderRadius='8px'; btnPlay.style.border='1px solid #444'; btnPlay.style.background='#1d1d1d'; btnPlay.style.cursor='pointer';
+      btnPlay.addEventListener('click', ()=>{
+        try {
+          window.dispatchEvent(new CustomEvent('assistant:play', { detail: { id: x.id } }));
+          if (typeof addMsg === 'function') addMsg('note', `Включаю: ${x.title||x.id}`);
+          if (typeof speak === 'function') speak('Включаю');
+        } catch {}
+      });
+      
+          row.appendChild(btnPlay);
+          if (x.embedOk === false && x.url) {
+            const a = document.createElement('a');
+            a.textContent = 'Открыть на YouTube';
+            a.href = x.url; a.target='_blank'; a.rel='noopener';
+            a.style.padding='6px 10px'; a.style.borderRadius='8px';
+            a.style.border='1px solid #444'; a.style.background='#1d1d1d';
+            a.style.textDecoration='none'; a.style.display='inline-block';
+            row.appendChild(a);
+          }
+
+      card.appendChild(t); card.appendChild(meta); card.appendChild(row);
+      wrap.appendChild(card);
+    });
+    if (typeof logEl !== 'undefined' && logEl && logEl.appendChild) {
+      logEl.appendChild(wrap);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+  }catch(e){ console.warn('[chat] addSuggestList failed', e); }
+}
+
+async function __tryPickFromLast(text){
+  try{
+    const items = (window.chat && window.chat.proLastSuggest) ? window.chat.proLastSuggest : [];
+    if (!items.length) return false;
+    const mNum = text.match(/\b(?:№|#)?\s*(\d{1,2})\b/);
+    let idx = null;
+    if (mNum) { idx = (parseInt(mNum[1],10) || 0) - 1; }
+    else {
+      const low = text.toLowerCase();
+      for (const [root, n] of Object.entries(__RU_ORD)) {
+        if (low.includes(root)) { idx = n-1; break; }
+      }
+    }
+    if (idx == null || idx < 0 || idx >= items.length) return false;
+    const pick = items[idx];
+    window.dispatchEvent(new CustomEvent('assistant:play', { detail: { id: pick.id } }));
+    if (typeof addMsg === 'function') addMsg('note', `Включаю вариант №${idx+1}`);
+    if (typeof speak === 'function') speak(`Включаю вариант номер ${idx+1}`);
+    return true;
+  }catch{return false;}
+}
+
+window.addEventListener('assistant:pro.suggest.result', (e)=>{
+  try {
+    const d = e?.detail || {}; const items = d.items || [];
+    if (!items.length) { if (typeof addMsg==='function') addMsg('bot', 'Не нашёл длинных видео под запрос. Попробуем другой запрос?'); return; }
+    if (typeof addMsg==='function') addMsg('bot', 'Нашёл варианты:');
+    __addSuggestList(items, { type: d.type || 'movie' });
+  } catch {}
+});
+
+
   function dispatch(name, detail = {}) {
     const ev = new CustomEvent(`assistant:${name}`, { detail, bubbles: true, composed: true });
     window.dispatchEvent(ev);
@@ -1119,6 +1208,77 @@ import { warmupBackend } from '../api/warmup.js';
         if (typeof res === "string") v = res;
       }
     } catch {}
+
+
+// PRO longform intents (safe wrapper)
+try {
+  const raw = v;
+  const low = raw.toLowerCase();
+
+  // quick "pick #n"
+  if (/\b(включи|поставь|запусти)\b/i.test(raw) && (/\b(№|#)?\s*\d{1,2}\b/.test(raw) || /(перв|втор|трет|четв|пят|шест|седьм|восьм|девят|десят)/i.test(raw))) {
+    const ok = await __tryPickFromLast(raw);
+    if (ok) return;
+  }
+
+  const hasMovie = /(\bфильм\b|\bфильмы\b|\bкино\b|\bmovie\b)/i.test(raw);
+  const hasAudio = /(аудио\s*книг|audiobook)/i.test(raw);
+
+  // infer mood/genre
+  const genreMap = new Map([
+    ['комед', 'комедия'],
+    ['драм', 'драма'],
+    ['боевик', 'боевик'],
+    ['ужас', 'ужасы'],
+    ['ромком', 'ромком'],
+    ['триллер', 'триллер'],
+    ['фантаст', 'фантастика'],
+    ['приключ', 'приключения']
+  ]);
+  let inferredMood = '';
+  for (const [k,v] of genreMap) { if (low.includes(k)) { inferredMood = v; break; } }
+  if (!inferredMood && /весел|весёл|fun|смешн/i.test(low)) inferredMood = 'комедия';
+
+  const needSuggest = /(вариант|подбери|предлож|посоветуй|порекомендуй|suggest|под настроение)/i.test(raw) || (!!inferredMood && !hasAudio);
+
+  if (hasMovie || hasAudio || inferredMood) {
+    const qm = raw.match(/["“”«»„‟']([^"“”«»„‟']{2,})["“”«»„‟']/);
+    const titleQuoted = qm ? qm[1].trim() : "";
+
+    let actor = "";
+    const am = raw.match(/(?:\bс\s+(?:актером|актрисой)?\s*|\bwith\s+)([a-zа-яёіїє][\w'\-]+(?:\s+[a-zа-яёіїє][\w'\-]+){0,2})/i);
+    if (am) actor = am[1].trim();
+
+    let mood = "";
+    let mm = raw.match(/под\s+настроени[ея]\s+([a-zа-яёіїє\- ]{3,})/i);
+    if (!mm) mm = raw.match(/настроени[ея]\s+([a-zа-яёіїє\- ]{3,})/i);
+    if (mm) mood = mm[1].trim();
+    if (!mood && inferredMood) mood = inferredMood;
+
+    let title = titleQuoted;
+    if (!title) {
+      const m2 = raw.match(/(?:фильм(?:ы)?|кино|audiobook|аудио\s*книга)\s+([^,;.!?]+)$/i);
+      if (m2) {
+        let t = m2[1];
+        t = t.replace(/\s+с\s+.+$/i, "").replace(/\s+with\s+.+$/i, "");
+        title = t.trim();
+      }
+    }
+
+    const type = hasAudio ? "audiobook" : "movie";
+    if (needSuggest) {
+      window.dispatchEvent(new CustomEvent('assistant:pro.suggest', { detail: { type, title, mood, actor, limit: 12 } }));
+      if (typeof addMsg==='function') addMsg("note", "Подбираю варианты…");
+      if (typeof speak==='function') speak("Подбираю варианты");
+      return;
+    } else {
+      window.dispatchEvent(new CustomEvent('assistant:pro.play', { detail: { type, title, mood, actor } }));
+      if (typeof addMsg==='function') addMsg("note", "Ищу и включаю " + (type === "audiobook" ? "аудиокнигу…" : "фильм…"));
+      if (typeof speak==='function') speak(type === "audiobook" ? "Ищу аудиокнигу" : "Ищу фильм");
+      return;
+    }
+  }
+} catch {}
 
     addMsg("user", v);
 

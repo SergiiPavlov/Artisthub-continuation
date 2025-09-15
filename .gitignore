@@ -7,9 +7,11 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Build & deps
 node_modules
 dist
 dist-ssr
+.vite
 *.local
 
 # Editor directories and files
@@ -23,14 +25,15 @@ dist-ssr
 *.sln
 *.sw?
 
-# local archives
+# Local archives / snapshots
 *.zip
+assistant_bundle_*/
 
-# secrets
+# Secrets
 .env
 .env.*.local
 
-# Windows reserved device names
+# Windows reserved device names (harmless on *nix, keep for safety)
 nul
 NUL
 con
@@ -55,9 +58,3 @@ lpt7
 lpt8
 lpt9
 
-<<<<<<< HEAD
-
-=======
->>>>>>> 86cd102 (feat(assistant): fullscreen voice commands + Help modal (EN); mobile menu overlay; minor fixes)
-
-assistant_bundle_*/
