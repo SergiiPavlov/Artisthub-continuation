@@ -3,13 +3,15 @@ import { API_BASE } from '../../assistant/apiBase.js';
 /* global YT */
 
 /**
- * Mini YouTube player (superset, v2.4.0)
- *
- * Новое vs 2.3.6:
- * - Кнопка Fullscreen под «×», с правильным z-index.
- * - Синхронизация состояния кнопки по fullscreenchange и CSS-фоллбэку.
- * - Выход из полноэкранного при Close.
- * - Безопасная диспетчеризация assistant:fullscreen/exit-fullscreen.
+ * Mini YouTube player (superset, v2.4.0) — build: prev-next-history v2 (2025-09-15)
+ * 
+ * Правки в этой сборке:
+ * - Жёсткая история для режима listType:"search" (YT searchMode) с безопасной навигацией назад/вперёд.
+ * - Кнопки Prev/Next всегда вызывают общие методы prev()/next() (никаких прямых previousVideo/nextVideo).
+ * - prev()/next() используют историю в searchMode, локальную очередь в обычном режиме,
+ *   и "умные" fallback-и (smartPrev/Next) когда очереди нет.
+ * - Строгий гард: локальная навигация включается только при queue.length > 1.
+ * - Яркий build-tag в консоли: легко проверить, что подключён именно этот файл.
  */
 
 let _instance = null;
@@ -22,6 +24,10 @@ function dbg(...a) {
     }
   } catch {}
 }
+
+(function buildTag() {
+  try { console.log('%c[player] build tag: prev-next-history v2', 'color:#0bf;font-weight:600'); } catch {}
+})();
 
 /* -------------------- Events -------------------- */
 function emit(name, detail = {}) {
@@ -161,6 +167,19 @@ export function createMiniPlayer() {
   /* ---------- state ---------- */
   let yt = null;
   let ready = false;
+  // --- Ready waiters for first-run stability ---
+  let _readyWaiters = [];
+  function _waitYTReady() {
+    if (ready && yt) return Promise.resolve();
+    return new Promise(res => _readyWaiters.push(res));
+  }
+  function _resolveYTReady() {
+    try {
+      const ws = _readyWaiters.slice();
+      _readyWaiters.length = 0;
+      ws.forEach(fn => { try{ fn(); } catch{} });
+    } catch {}
+  }
   let duration = 0;
   let timer = null;
   let muted = false;
@@ -174,6 +193,12 @@ export function createMiniPlayer() {
   let searchMode = false;
 
   let lastVidId = null;
+  // ---- History for searchMode ----
+  let searchHistory = [];
+  let histIdx = -1;
+  // internal marker to avoid duplicating history on programmatic loads
+  let _historyNav = false;
+
   let sameIdPlays = 0;
   let lastQuery = '';
   let variantIndex = 0;
@@ -396,6 +421,24 @@ export function createMiniPlayer() {
     else { lastVidId = id; sameIdPlays = 1; }
     dbg('PLAYING id:', id, 'same plays:', sameIdPlays, 'searchMode:', searchMode);
 
+    // --- history write for searchMode ---
+    if (searchMode) {
+      try {
+        if (_historyNav) {
+          // Навигация по истории: не дублируем, просто снимаем флаг
+          _historyNav = false;
+        } else {
+          const last = searchHistory[searchHistory.length - 1];
+          if (id !== last) {
+            searchHistory.push(id);
+            histIdx = searchHistory.length - 1;
+          }
+        }
+        dbg('history:', { len: searchHistory.length, histIdx });
+      } catch {}
+    }
+
+    // анти-зацикливатель
     if (searchMode && sameIdPlays >= 3) {
       sameIdPlays = 0;
       dbg('dup id → next/rotate');
@@ -477,7 +520,8 @@ export function createMiniPlayer() {
             setBubbleAmp(volVal);
             startTimer();
             emit("ready", {});
-            armStuckGuard();
+                        _resolveYTReady();
+armStuckGuard();
             tryAutoplaySoft();
 
             clearWatchdog();
@@ -543,11 +587,7 @@ export function createMiniPlayer() {
         cfg.playerVars.autoplay = 1;
       }
       yt = new YT.Player("am-player-yt", cfg);
-    } else {
-      ready = true;
-      startTimer();
-      tryAutoplaySoft();
-    }
+    } else { ready = true; startTimer(); tryAutoplaySoft(); _resolveYTReady(); }
   }
 
   /* ---------- Queue ---------- */
@@ -575,6 +615,7 @@ export function createMiniPlayer() {
     duration = 0; clearTimer(); clearWatchdog(); clearStuckGuard(); clearAutoplayTimer();
     try {
       await ensureYT(null);
+      await _waitYTReady();
       ready = true;
       yt.loadVideoById({ videoId: id });
       tryAutoplaySoft();
@@ -582,7 +623,7 @@ export function createMiniPlayer() {
   }
 
   function autoNext() {
-    if (queue.length && !searchMode) {
+    if (queue.length > 1 && !searchMode) {
       if (qi < queue.length - 1) playByIndex(qi + 1, { reveal: false });
       else if (loop) playByIndex(0, { reveal: false });
       else if (yt && yt.nextVideo) yt.nextVideo();
@@ -700,9 +741,9 @@ export function createMiniPlayer() {
 
   // Fullscreen по клику (есть user gesture → стабильно)
   btnFS?.addEventListener("click", (e) => {
-  e.preventDefault();
-  document.dispatchEvent(new CustomEvent("assistant:fullscreen-toggle", { bubbles: true, composed: true }));
-  });  
+    e.preventDefault();
+    document.dispatchEvent(new CustomEvent("assistant:fullscreen-toggle", { bubbles: true, composed: true }));
+  });
 
   aYTlink.addEventListener("click", () => {
     try { yt?.stopVideo?.(); yt?.destroy?.(); } catch {}
@@ -720,10 +761,8 @@ export function createMiniPlayer() {
     if (s === YT.PlayerState.PLAYING) { yt.pauseVideo?.(); uiPlayIcon(false); setBubblePulse(false); }
     else { yt.playVideo?.(); uiPlayIcon(true); setBubblePulse(true); armStuckGuard(); }
   });
-  btnPrev.addEventListener("click", () => {
-    if (queue.length && !searchMode) { playByIndex(qi > 0 ? qi - 1 : (loop ? queue.length - 1 : 0), { reveal: true }); }
-    else { yt?.previousVideo?.(); armStuckGuard(); }
-  });
+  // важное изменение: всегда через общие функции
+  btnPrev.addEventListener("click", () => { prev(); });
   btnNext.addEventListener("click", () => { next(); });
 
   btnMute.addEventListener("click", () => {
@@ -790,8 +829,12 @@ export function createMiniPlayer() {
       const artist = title.includes('-') ? title.split('-')[0].trim() : author;
       if (artist) {
         dbg('smartNextFromCurrent(): re-search by', artist);
+        const ids = await fetchYTSearchIds(artist, 25);
+        if (ids.length > 1) { await openQueue(ids, { shuffle:false, startIndex:1 }); return; }
         await playSearch(artist);
       } else if (author) {
+        const ids = await fetchYTSearchIds(author, 25);
+        if (ids.length > 1) { await openQueue(ids, { shuffle:false, startIndex:1 }); return; }
         await playSearch(author);
       }
     } catch (e) {
@@ -799,32 +842,65 @@ export function createMiniPlayer() {
     }
   }
 
+  async function smartPrevFromCurrent() {
+    try {
+      const vd = yt?.getVideoData?.();
+      const title = (vd?.title || "").trim();
+      const author = (vd?.author || "").trim();
+      const artist = title.includes('-') ? title.split('-')[0].trim() : author;
+      if (artist) {
+        dbg('smartPrevFromCurrent(): re-search by', artist);
+        const ids = await fetchYTSearchIds(artist, 25);
+        if (ids.length > 1) { await openQueue(ids, { shuffle:false, startIndex:0 }); return; }
+        await playSearch(artist);
+      } else if (author) {
+        const ids = await fetchYTSearchIds(author, 25);
+        if (ids.length > 1) { await openQueue(ids, { shuffle:false, startIndex:0 }); return; }
+        await playSearch(author);
+      }
+    } catch (e) {
+      dbg('smartPrevFromCurrent() failed', e);
+    }
+  }
+
   function next() {
-    if (queue.length && !searchMode) {
+    if (queue.length > 1 && !searchMode) {
       const reveal = !dock.classList.contains("am-player--min");
       playByIndex(qi < queue.length - 1 ? qi + 1 : (loop ? 0 : qi), { reveal });
-    } else {
-      if (searchMode) {
-        yt?.nextVideo?.();
-        armStuckGuard();
+    } else if (searchMode) {
+      if (histIdx >= 0 && histIdx < searchHistory.length - 1) {
+        _historyNav = true;
+        histIdx++;
+        yt?.loadVideoById?.(searchHistory[histIdx]);
       } else {
-        smartNextFromCurrent();
+        yt?.nextVideo?.();
       }
+      armStuckGuard();
+    } else {
+      smartNextFromCurrent();
     }
   }
   function prev() {
-    if (queue.length && !searchMode) {
+    if (queue.length > 1 && !searchMode) {
       const reveal = !dock.classList.contains("am-player--min");
       playByIndex(qi > 0 ? qi - 1 : (loop ? queue.length - 1 : 0), { reveal });
-    } else {
-      yt?.previousVideo?.();
+    } else if (searchMode) {
+      if (histIdx > 0) {
+        _historyNav = true;
+        histIdx--;
+        yt?.loadVideoById?.(searchHistory[histIdx]);
+      } else {
+        yt?.previousVideo?.();
+      }
       armStuckGuard();
+    } else {
+      smartPrevFromCurrent();
     }
   }
 
   function play() {
     if (yt && ready) { yt.playVideo?.(); uiPlayIcon(true); setBubblePulse(true); armStuckGuard(); return; }
-    if (queue.length && !searchMode) { playByIndex(qi < 0 ? 0 : qi, { reveal: false }); return; }
+    if (queue.length > 0 && !searchMode) { playByIndex(qi < 0 ? 0 : qi, { reveal: false }); return; }
   }
   function pause() {
     try { yt?.pauseVideo?.(); } catch {}
@@ -869,9 +945,10 @@ export function createMiniPlayer() {
 
     searchMode = true;
     queue = []; qi = -1;
+    searchHistory = []; histIdx = -1;
     await ensureYT(null);
-    try {
-      yt.loadPlaylist({ listType: "search", list: q, index: 0 });
+    await _waitYTReady();
+    try { yt.loadPlaylist({ listType: "search", list: q, index: 0 });
       yt.playVideo?.();
       clearSearchWatch();
       searchWatchdogId = setTimeout(() => {
@@ -926,5 +1003,3 @@ const Player = {
 export default Player;
 
 if (typeof window !== 'undefined') { window.Player = Player; }
-
-

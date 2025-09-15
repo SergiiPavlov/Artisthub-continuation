@@ -66,18 +66,19 @@ export async function ttsSpeak(arg1, langMaybe, third) {
       const audio = new Audio(url);
       audio.preload = 'auto';
 
-      // Если у тебя есть анлокер — прогрей аудио-контекст перед play()
+      // Если есть анлокер — прогрей аудио-контекст перед play()
       if (typeof window.__ensureAudioUnlocked === 'function') {
-        await window.__ensureAudioUnlocked();
+        try { await window.__ensureAudioUnlocked(); } catch {}
       }
 
       try {
-        await audio.play(); // ВАЖНО: ждём; если заблокировано — упадём в catch и пойдём на браузерный TTS
+        // ВАЖНО: ждём промис — если автоплей заблокирован, пойдём в браузерный TTS
+        await audio.play();
         audio.onended = () => URL.revokeObjectURL(url);
         audio.onerror = () => URL.revokeObjectURL(url);
-        return true; // серверный TTS успешно озвучил → всё, выходим
-      } catch (e) {
-        URL.revokeObjectURL(url); // не сыграло — попробуем браузерный TTS
+        return true; // серверный TTS успешно озвучил
+      } catch {
+        URL.revokeObjectURL(url); // не сыграло — пробуем браузерный TTS
       }
     }
 =======
@@ -121,7 +122,6 @@ export async function ttsSpeak(arg1, langMaybe, third) {
 
   return false;
 }
-
 
 function toBCP47(code) {
   const c = String(code || '').toLowerCase();
