@@ -3,6 +3,7 @@ import { warmupBackend } from '../api/warmup.js';
 
 // Chat Friend + AI bridge with memory + Provider + Server/Browser TTS
 // VERSION: chat.js v2.8.9
+// build tag: chat_pro_longform_v3_SAFE_FIXED (no IIFE, no redeclare)
 // (manual next/prev guards; prev voice guard)
 // — 2025-09-14
 (() => {
@@ -658,7 +659,18 @@ function __addSuggestList(items, opts={type:'movie'}){
           if (typeof speak === 'function') speak('Включаю');
         } catch {}
       });
-      row.appendChild(btnPlay);
+      
+          row.appendChild(btnPlay);
+          if (x.embedOk === false && x.url) {
+            const a = document.createElement('a');
+            a.textContent = 'Открыть на YouTube';
+            a.href = x.url; a.target='_blank'; a.rel='noopener';
+            a.style.padding='6px 10px'; a.style.borderRadius='8px';
+            a.style.border='1px solid #444'; a.style.background='#1d1d1d';
+            a.style.textDecoration='none'; a.style.display='inline-block';
+            row.appendChild(a);
+          }
+
       card.appendChild(t); card.appendChild(meta); card.appendChild(row);
       wrap.appendChild(card);
     });
