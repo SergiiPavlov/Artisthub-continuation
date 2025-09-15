@@ -58,6 +58,7 @@ export async function ttsSpeak(arg1, langMaybe, third) {
       body: JSON.stringify(voice ? { text, lang, voice } : { text, lang }),
     });
 
+<<<<<<< HEAD
     const ct = (r.headers.get('content-type') || '').toLowerCase();
     if (r.ok && (ct.includes('audio/') || ct.includes('octet-stream'))) {
       const blob = await r.blob();
@@ -80,6 +81,27 @@ export async function ttsSpeak(arg1, langMaybe, third) {
         URL.revokeObjectURL(url); // не сыграло — пробуем браузерный TTS
       }
     }
+=======
+ const ct = (r.headers.get('content-type') || '').toLowerCase();
++    if (r.ok && (ct.includes('audio/') || ct.includes('octet-stream'))) {
++      const blob = await r.blob();
++      const url = URL.createObjectURL(blob);
++      const audio = new Audio(url);
++      audio.preload = 'auto';
++      // если не «разлочен» звук – попросим разлочить
++      if (typeof window.__ensureAudioUnlocked === 'function') {
++        await window.__ensureAudioUnlocked();
++      }
++      try {
++        await audio.play();              // ВАЖНО: ждём промис
++        audio.onended = () => URL.revokeObjectURL(url);
++        audio.onerror = () => URL.revokeObjectURL(url);
++        return true;                     // успех → не нужен fallback
++      } catch (e) {
++        URL.revokeObjectURL(url);        // не сыграло → пойдём в браузерный TTS
++      }
++    }
+>>>>>>> 86cd102 (feat(assistant): fullscreen voice commands + Help modal (EN); mobile menu overlay; minor fixes)
   } catch {
     // сервер не ответил/вернул не-аудио — пойдём в браузерный TTS
   }
