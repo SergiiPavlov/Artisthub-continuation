@@ -21,11 +21,11 @@ export async function ytSearch({ q, max = 25, exclude = [], shuffle = true } = {
     body: JSON.stringify({ q, max, exclude, shuffle }),
   });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r.json(); // { ids: [...] } или { items: [...] }
+  return r.json(); // { ids: [...] }
 }
 
 /**
- * TTS: сначала серверный (/api/tts?lang=...), при ошибке — Web Speech API.
+ * Голос: сначала серверный TTS (/api/tts?lang=...), при ошибке — Web Speech API.
  * Поддерживает оба стиля:
  *   - ttsSpeak({ text, lang, voice })
  *   - ttsSpeak(text, lang, voiceOrOptions)
@@ -47,6 +47,7 @@ export async function ttsSpeak(arg1, langMaybe, third) {
     else if (third && typeof third === 'object' && 'voice' in third) voice = String(third.voice || '');
   }
 
+  text = (text || '').trim();
   if (!text) return false;
 
   // 1) Серверный TTS (если доступен): принимаем только audio/*
@@ -59,48 +60,50 @@ export async function ttsSpeak(arg1, langMaybe, third) {
     });
 
     const ct = (r.headers.get('content-type') || '').toLowerCase();
-    if (r.ok && (ct.startsWith('audio/') || ct.includes('octet-stream'))) {
-      // дождёмся «разлочки» звука в контексте пользовательского жеста
-      if (typeof window !== 'undefined' && typeof window.__ensureAudioUnlocked === 'function') {
-        try { await window.__ensureAudioUnlocked(); } catch {}
-      }
+    if (r.ok && (ct.includes('audio/') || ct.includes('octet-stream'))) {
       const blob = await r.blob();
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
       audio.preload = 'auto';
+
+      // Если есть анлокер — прогрей аудио-контекст перед play()
+      if (typeof window.__ensureAudioUnlocked === 'function') {
+        try { await window.__ensureAudioUnlocked(); } catch {}
+      }
+
       try {
-        await audio.play();                // ждём промис
+        // ВАЖНО: ждём промис — если автоплей заблокирован, пойдём в браузерный TTS
+        await audio.play();
         audio.onended = () => URL.revokeObjectURL(url);
         audio.onerror = () => URL.revokeObjectURL(url);
-        return true;                       // успех → не нужен fallback
-      } catch (e) {
-        URL.revokeObjectURL(url);          // не сыграло → пойдём в браузерный TTS
+        return true; // серверный TTS успешно озвучил
+      } catch {
+        URL.revokeObjectURL(url); // не сыграло — пробуем браузерный TTS
       }
     }
   } catch {
-    // сервер не ответил/вернул не-аудио — пойдём в браузерный TTS
+    // игнор — уйдём на браузерный TTS
   }
 
-  // 2) Браузерный TTS (fallback)
-  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+  // 2) Браузерный TTS (Web Speech API)
+  try {
+    if (!('speechSynthesis' in window)) return false;
     const u = new SpeechSynthesisUtterance(text);
     u.lang = toBCP47(lang);
-    try {
+    u.rate = 1;
+    u.pitch = 1;
+    if (voice) u.voice = (window.speechSynthesis.getVoices?.() || []).find(v => v.name === voice) || null;
+    // если не нашли подходящий голос — подберём по языку
+    if (!u.voice) {
       const voices = window.speechSynthesis.getVoices?.() || [];
-      // пробуем подобрать голос по языку
-      const pref = String(u.lang || '').slice(0,2).toLowerCase();
+      const pref = u.lang.slice(0, 2).toLowerCase();
       const byLang = voices.filter(v => String(v.lang || '').toLowerCase().startsWith(pref));
-      if (voice) {
-        const byName = voices.find(v => String(v.name || '').toLowerCase().includes(String(voice).toLowerCase()));
-        if (byName) u.voice = byName;
-        else if (byLang.length) u.voice = byLang[0];
-      } else if (byLang.length) {
-        u.voice = byLang[0];
-      }
-    } catch {}
-    try { window.speechSynthesis.cancel(); } catch {}
+      if (byLang.length) u.voice = byLang[0];
+    }
     window.speechSynthesis.speak(u);
     return true;
+  } catch {
+    // как последний шанс — ничего не делаем
   }
 
   return false;
