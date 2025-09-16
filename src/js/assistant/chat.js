@@ -118,6 +118,11 @@ var c = (typeof c === 'function')
           <small class="assistant__hint">Нужно настроить /api/tts на сервере. Иначе будет браузерный голос.</small>
         </label>
         <label class="assistant__row">
+          <span>Режим без звука (mute)</span>
+          <input id="as-mute" type="checkbox" />
+          <small class="assistant__hint">Выключает звук плеера и озвучку ответов.</small>
+        </label>
+        <label class="assistant__row">
           <span>Пост. прослушивание (wake word)</span>
           <input id="as-wake-on" type="checkbox" />
         </label>
@@ -183,11 +188,40 @@ var c = (typeof c === 'function')
   const selVoice = root.querySelector("#as-voice");
   const selProv = root.querySelector("#as-provider");
   const chkTTS = root.querySelector("#as-tts-server");
+  const chkMute = root.querySelector("#as-mute");
   const btnTest = root.querySelector("#as-test-voice");
   const btnClr = root.querySelector("#as-clear-log");
   const btnHideSettings = root.querySelector("#as-hide-settings");
   const chkWake = root.querySelector("#as-wake-on");
   const inpWake = root.querySelector("#as-wake-phrase");
+  // ─── mute helpers ─────────────────────────────────────────────────────
+  function isMuted() {
+    try { return localStorage.getItem('assistant.mute') === '1'; } catch { return false; }
+  }
+  function applyMuteFlag(toast=true) {
+    try {
+      const wantMute = isMuted();
+      if (chkMute) chkMute.checked = wantMute;
+      const cur = (window.Player && typeof window.Player.getVolume === 'function') ? (window.Player.getVolume() || 0.6) : 0.6;
+      if (wantMute) {
+        try { localStorage.setItem('assistant.vol.prev', String(cur)); } catch {}
+        if (window.Player && typeof window.Player.setVolume === 'function') window.Player.setVolume(0);
+        if (toast) addMsg('note', 'Режим без звука: ВКЛ');
+      } else {
+        const prev = parseFloat(localStorage.getItem('assistant.vol.prev') || '0.6');
+        if (window.Player && typeof window.Player.setVolume === 'function') window.Player.setVolume(isFinite(prev) ? prev : 0.6);
+        if (toast) addMsg('note', 'Режим без звука: ВЫКЛ');
+      }
+    } catch {}
+  }
+  if (chkMute) {
+    try { chkMute.checked = isMuted(); } catch {}
+    chkMute.addEventListener('change', () => {
+      try { localStorage.setItem('assistant.mute', chkMute.checked ? '1' : '0'); } catch {}
+      applyMuteFlag(true);
+    });
+  }
+  applyMuteFlag(false);
 
   // ─── memory ───────────────────────────────────────────────────────────
   const chat = {
@@ -474,6 +508,7 @@ var c = (typeof c === 'function')
 
   // ─── public speak() ──────────────────────────────────────────────────
   function speak(text) {
+    if (typeof isMuted === 'function' && isMuted()) return;
     const lang = state.langPref;
     const useServer = chkTTS.checked && !!API_BASE;
     if (useServer) {
