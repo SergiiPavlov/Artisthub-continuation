@@ -1,5 +1,21 @@
 import { API_BASE } from './apiBase.js';
 import { warmupBackend } from '../api/warmup.js';
+/* === safe logger for chat.js === */
+/* eslint-disable no-var */
+var c = (typeof c === 'function')
+  ? c
+  : (...args) => { try { (console.debug || console.log).call(console, '[chat]', ...args); } catch {} };
+/* eslint-enable no-var */
+
+(function setupFirstGestureFlag(){
+  function mark(){ try { window.__USER_GESTURE__ = true; } catch {}
+    window.removeEventListener('pointerdown', mark, { once:true });
+    window.removeEventListener('keydown', mark, { once:true });
+  }
+  window.addEventListener('pointerdown', mark, { once:true });
+  window.addEventListener('keydown', mark, { once:true });
+})();
+
 
 // Chat Friend + AI bridge with memory + Provider + Server/Browser TTS
 // VERSION: chat.js v2.8.9

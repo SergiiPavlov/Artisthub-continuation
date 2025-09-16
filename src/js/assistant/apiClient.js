@@ -47,6 +47,7 @@ export async function ttsSpeak(arg1, langMaybe, third) {
     else if (third && typeof third === 'object' && 'voice' in third) voice = String(third.voice || '');
   }
 
+  text = (text || '').trim();
   if (!text) return false;
 
   // 1) Серверный TTS (если доступен): принимаем только audio/*
@@ -58,7 +59,6 @@ export async function ttsSpeak(arg1, langMaybe, third) {
       body: JSON.stringify(voice ? { text, lang, voice } : { text, lang }),
     });
 
-<<<<<<< HEAD
     const ct = (r.headers.get('content-type') || '').toLowerCase();
     if (r.ok && (ct.includes('audio/') || ct.includes('octet-stream'))) {
       const blob = await r.blob();
@@ -81,43 +81,29 @@ export async function ttsSpeak(arg1, langMaybe, third) {
         URL.revokeObjectURL(url); // не сыграло — пробуем браузерный TTS
       }
     }
-=======
- const ct = (r.headers.get('content-type') || '').toLowerCase();
-+    if (r.ok && (ct.includes('audio/') || ct.includes('octet-stream'))) {
-+      const blob = await r.blob();
-+      const url = URL.createObjectURL(blob);
-+      const audio = new Audio(url);
-+      audio.preload = 'auto';
-+      // если не «разлочен» звук – попросим разлочить
-+      if (typeof window.__ensureAudioUnlocked === 'function') {
-+        await window.__ensureAudioUnlocked();
-+      }
-+      try {
-+        await audio.play();              // ВАЖНО: ждём промис
-+        audio.onended = () => URL.revokeObjectURL(url);
-+        audio.onerror = () => URL.revokeObjectURL(url);
-+        return true;                     // успех → не нужен fallback
-+      } catch (e) {
-+        URL.revokeObjectURL(url);        // не сыграло → пойдём в браузерный TTS
-+      }
-+    }
->>>>>>> 86cd102 (feat(assistant): fullscreen voice commands + Help modal (EN); mobile menu overlay; minor fixes)
   } catch {
-    // сервер не ответил/вернул не-аудио — пойдём в браузерный TTS
+    // игнор — уйдём на браузерный TTS
   }
 
-  // 2) Браузерный TTS (fallback)
-  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+  // 2) Браузерный TTS (Web Speech API)
+  try {
+    if (!('speechSynthesis' in window)) return false;
     const u = new SpeechSynthesisUtterance(text);
     u.lang = toBCP47(lang);
-    try {
+    u.rate = 1;
+    u.pitch = 1;
+    if (voice) u.voice = (window.speechSynthesis.getVoices?.() || []).find(v => v.name === voice) || null;
+    // если не нашли подходящий голос — подберём по языку
+    if (!u.voice) {
       const voices = window.speechSynthesis.getVoices?.() || [];
       const pref = u.lang.slice(0, 2).toLowerCase();
       const byLang = voices.filter(v => String(v.lang || '').toLowerCase().startsWith(pref));
       if (byLang.length) u.voice = byLang[0];
-    } catch {}
+    }
     window.speechSynthesis.speak(u);
     return true;
+  } catch {
+    // как последний шанс — ничего не делаем
   }
 
   return false;
@@ -130,3 +116,4 @@ function toBCP47(code) {
   if (c === 'en' || c.startsWith('en')) return 'en-US';
   return c || 'ru-RU';
 }
+
