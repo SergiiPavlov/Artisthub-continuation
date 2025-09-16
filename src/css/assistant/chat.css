@@ -354,3 +354,26 @@ body {
   bottom: 0;
   background: #0f1216;
 }
+
+/* assistant overrides (safe-area + outline) */
+:root.assistant-fs-doc .assistant-fs .am-player__bar,
+.am-player:fullscreen .am-player__bar,
+.app--fullscreen .am-player__bar {
+  padding-bottom: 0;
+  padding-bottom: max(0px, env(safe-area-inset-bottom));
+}
+
+.assistant__toggle {
+  right: max(12px, env(safe-area-inset-right));
+  bottom: max(12px, env(safe-area-inset-bottom));
+}
+
+.assistant__panel {
+  right: max(12px, env(safe-area-inset-right));
+  bottom: max(12px, env(safe-area-inset-bottom));
+}
+
+.assistant__panel :focus {
+  outline: 2px solid currentColor;
+  outline-color: color-mix(in oklab, var(--as-accent) 70%, #fff 0%);
+}
