@@ -1,7 +1,6 @@
-/* PRO: YouTube longform (movies & audiobooks) — v0.5.1
-   Исправление P1 (Codex): учитывать minSecOverride в suggestLongform (и playLongform).
-   - Если assistant:pro.suggest приходит с { minSecOverride: 0 } (путь «Показать короткие»),
-     то подбор идёт без фильтра по длительности.
+/* PRO: YouTube longform (movies & audiobooks) — v0.5.2
+   - P1 fix: Player.open/openQueue + Player.play вместо Player.play(id)
+   - Honor minSecOverride (0 => допускаем короткие) — как в v0.5.1
 */
 
 import Player from '../artists/features/player.js';
@@ -23,7 +22,7 @@ const EXTRA_SOVIET = ['hd', '4k', 'ретро', 'советское кино п�
 function sanitize(s=''){ return String(s||'').replace(/\s+/g,' ').trim(); }
 function ytWatchUrl(id){ return `https://www.youtube.com/watch?v=${encodeURIComponent(id)}`; }
 
-/* ====================== YT API, не ломая onYouTubeIframeAPIReady ====================== */
+/* ====================== YT API (аккуратно) ====================== */
 function ensureYTApi() {
   if (window.YT && window.YT.Player) return Promise.resolve(true);
   const present = !!document.querySelector('script[src*="youtube.com/iframe_api"]');
@@ -54,10 +53,7 @@ function ensureProbe() {
     _probeReady = false;
     _probe = new YT.Player('am-probe-yt', {
       width: 200, height: 100, videoId: null,
-      events: {
-        onReady: () => { _probeReady = true; },
-        onStateChange: () => {}
-      },
+      events: { onReady: () => { _probeReady = true; }, onStateChange: () => {} },
       playerVars: { modestbranding:1, controls:0, disablekb:1 }
     });
   });
@@ -105,13 +101,11 @@ function cueAndReadMeta(id) {
 
 /* ======================= СЕРВЕР ======================= */
 async function searchServer(q, minSec) {
-  if (!API_BASE && minSec > 0) return null; // серверный фильтр по длительности нужен только когда minSec > 0
+  if (!API_BASE && minSec > 0) return null;
   try {
     const body = { q, max: PROBE_LIMIT, filters: { durationSecMin: minSec|0 } };
     const r = await fetch(`${API_BASE}/api/yt/search`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
     });
     if (!r.ok) return null;
     const j = await r.json();
@@ -141,7 +135,7 @@ function composeQueries({ type, title, mood, actor }) {
   return qs.filter(Boolean).slice(0, 10);
 }
 
-/* ===================== Клиент: подбор (любой/длинный) ===================== */
+/* ===================== Клиентский подбор ===================== */
 function looksValidTitle(s='') {
   const t = (s||'').toLowerCase();
   const STOPWORDS = /(сцена|moment|clip|лучшие|топ|обзор|teaser|trailer|трейлер|тизер|коротк|short|recap|шортс|шорт)/i;
@@ -173,6 +167,24 @@ async function suggestLongformClient({ type='movie', title='', mood='', actor=''
 }
 
 /* ======================= Публичные функции ======================= */
+async function openAndPlayById(id) {
+  try {
+    if (Player && typeof Player.open === 'function') {
+      await Player.open(id);
+      if (typeof Player.play === 'function') await Player.play();
+      return true;
+    }
+    if (Player && typeof Player.openQueue === 'function') {
+      await Player.openQueue([id], { shuffle:false, startIndex:0 });
+      if (typeof Player.play === 'function') await Player.play();
+      return true;
+    }
+  } catch(e) { console.warn('[longform] open/play error', e); }
+  // Фолбэк — новое окно YouTube
+  const w = window.open(ytWatchUrl(id), "_blank", "noopener");
+  return !!w;
+}
+
 async function playLongform({ type='movie', title='', mood='', actor='', minSecOverride }={}) {
   const minSec = (typeof minSecOverride === 'number') ? minSecOverride : (type === 'audiobook' ? AUDIOBOOK_MIN_SEC : LONG_MIN_SEC);
   const queries = composeQueries({ type, title, mood, actor });
@@ -182,14 +194,13 @@ async function playLongform({ type='movie', title='', mood='', actor='', minSecO
     const sugg = await suggestLongformClient({ type, title, mood, actor, limit: 1, minSecOverride: minSec });
     if (Array.isArray(sugg) && sugg.length) {
       const best = sugg[0];
-      if (best && best.id) { await Player.play(best.id); return true; }
+      if (best && best.id) { return await openAndPlayById(best.id); }
     }
-
     // 2) Сервер с фильтром, только если нужен порог
     const items = (minSec > 0) ? await searchServer(q, minSec) : null;
     if (Array.isArray(items) && items.length) {
       const got = items.find(x => (x.durationSec||0) >= minSec) || items[0];
-      if (got && got.id) { await Player.play(got.id); return true; }
+      if (got && got.id) { return await openAndPlayById(got.id); }
     }
   }
 
@@ -199,7 +210,6 @@ async function playLongform({ type='movie', title='', mood='', actor='', minSecO
 }
 
 async function suggestLongform({ type='movie', title='', mood='', actor='', limit=SUGGEST_LIMIT_DEFAULT, minSecOverride }={}) {
-  // P1 fix: учитываем minSecOverride (0 => короткие допустимы)
   const minSec = (typeof minSecOverride === 'number') ? minSecOverride : (type === 'audiobook' ? AUDIOBOOK_MIN_SEC : LONG_MIN_SEC);
   const queries = composeQueries({ type, title, mood, actor });
   const q = queries[0] || title || actor || mood || (type === 'movie' ? 'full movie' : 'аудиокнига полностью');
@@ -235,19 +245,12 @@ async function suggestLongform({ type='movie', title='', mood='', actor='', limi
 }
 
 function dispatchSuggestions(payload) {
-  try {
-    window.dispatchEvent(new CustomEvent('assistant:pro.suggest.result', { detail: payload }));
-  } catch {}
+  try { window.dispatchEvent(new CustomEvent('assistant:pro.suggest.result', { detail: payload })); } catch {}
 }
 
 /* ===== Слушатели событий ===== */
-window.addEventListener('assistant:pro.play', (e) => {
-  const d = e?.detail || {};
-  playLongform(d).catch(err => console.warn('[longform] play error', err));
-});
-window.addEventListener('assistant:pro.suggest', (e) => {
-  const d = e?.detail || {};
-  suggestLongform(d).catch(err => console.warn('[longform] suggest error', err));
-});
+window.addEventListener('assistant:pro.play', (e) => { const d = e?.detail || {}; playLongform(d).catch(err => console.warn('[longform] play error', err)); });
+window.addEventListener('assistant:pro.suggest', (e) => { const d = e?.detail || {}; suggestLongform(d).catch(err => console.warn('[longform] suggest error', err)); });
 
-console.log('[longform] PRO longform v0.5.1 ready');
+console.log('[longform] PRO longform v0.5.2 ready');
+
