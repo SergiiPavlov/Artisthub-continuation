@@ -1,8 +1,7 @@
-/* PRO: YouTube longform (movies & audiobooks) — v0.5
-   Изменения vs v0.4:
-   - Больше НИКАКОГО молчаливого fallback на короткие: если длинных нет —
-     всегда шлём assistant:pro.suggest.result с items: [] и q (для UI-фолбэка).
-   - suggest всегда шлёт result (даже пустой), чтобы UI мог показать ссылку на YouTube и спросить про короткие.
+/* PRO: YouTube longform (movies & audiobooks) — v0.5.1
+   Исправление P1 (Codex): учитывать minSecOverride в suggestLongform (и playLongform).
+   - Если assistant:pro.suggest приходит с { minSecOverride: 0 } (путь «Показать короткие»),
+     то подбор идёт без фильтра по длительности.
 */
 
 import Player from '../artists/features/player.js';
@@ -106,7 +105,7 @@ function cueAndReadMeta(id) {
 
 /* ======================= СЕРВЕР ======================= */
 async function searchServer(q, minSec) {
-  if (!API_BASE) return null;
+  if (!API_BASE && minSec > 0) return null; // серверный фильтр по длительности нужен только когда minSec > 0
   try {
     const body = { q, max: PROBE_LIMIT, filters: { durationSecMin: minSec|0 } };
     const r = await fetch(`${API_BASE}/api/yt/search`, {
@@ -142,7 +141,7 @@ function composeQueries({ type, title, mood, actor }) {
   return qs.filter(Boolean).slice(0, 10);
 }
 
-/* ===================== Клиент: подбор длинных ===================== */
+/* ===================== Клиент: подбор (любой/длинный) ===================== */
 function looksValidTitle(s='') {
   const t = (s||'').toLowerCase();
   const STOPWORDS = /(сцена|moment|clip|лучшие|топ|обзор|teaser|trailer|трейлер|тизер|коротк|short|recap|шортс|шорт)/i;
@@ -152,7 +151,7 @@ function looksValidTitle(s='') {
 }
 
 async function suggestLongformClient({ type='movie', title='', mood='', actor='', limit=SUGGEST_LIMIT_DEFAULT, minSecOverride }={}) {
-  const minSec = minSecOverride ?? (type === 'audiobook' ? AUDIOBOOK_MIN_SEC : LONG_MIN_SEC);
+  const minSec = (typeof minSecOverride === 'number') ? minSecOverride : (type === 'audiobook' ? AUDIOBOOK_MIN_SEC : LONG_MIN_SEC);
   const queries = composeQueries({ type, title, mood, actor });
   const out = [];
   const seen = new Set();
@@ -163,7 +162,7 @@ async function suggestLongformClient({ type='movie', title='', mood='', actor=''
       seen.add(id);
       const meta = await cueAndReadMeta(id);
       if (!meta) continue;
-      if (meta.durationSec >= minSec && looksValidTitle(meta.title)) {
+      if ((minSec === 0 || meta.durationSec >= minSec) && looksValidTitle(meta.title)) {
         out.push(meta);
         if (out.length >= limit) break;
       }
@@ -174,57 +173,63 @@ async function suggestLongformClient({ type='movie', title='', mood='', actor=''
 }
 
 /* ======================= Публичные функции ======================= */
-async function playLongform({ type='movie', title='', mood='', actor='' }) {
-  const minSec = (type === 'audiobook') ? AUDIOBOOK_MIN_SEC : LONG_MIN_SEC;
+async function playLongform({ type='movie', title='', mood='', actor='', minSecOverride }={}) {
+  const minSec = (typeof minSecOverride === 'number') ? minSecOverride : (type === 'audiobook' ? AUDIOBOOK_MIN_SEC : LONG_MIN_SEC);
   const queries = composeQueries({ type, title, mood, actor });
 
   for (const q of queries) {
-    // 1) КЛИЕНТСКИЕ длинные кандидаты — ПРИОРИТЕТ
-    const sugg = await suggestLongformClient({ type, title, mood, actor, limit: 1 });
+    // 1) Клиентский подбор
+    const sugg = await suggestLongformClient({ type, title, mood, actor, limit: 1, minSecOverride: minSec });
     if (Array.isArray(sugg) && sugg.length) {
       const best = sugg[0];
       if (best && best.id) { await Player.play(best.id); return true; }
     }
 
-    // 2) СЕРВЕР с фильтром по длительности
-    const items = await searchServer(q, minSec);
+    // 2) Сервер с фильтром, только если нужен порог
+    const items = (minSec > 0) ? await searchServer(q, minSec) : null;
     if (Array.isArray(items) && items.length) {
       const got = items.find(x => (x.durationSec||0) >= minSec) || items[0];
       if (got && got.id) { await Player.play(got.id); return true; }
     }
   }
 
-  // 3) НЕТ длинных — шлём пустой результат, UI спросит про короткие
+  // 3) Нет подходящих — отдать пустой результат, UI спросит про короткие
   dispatchSuggestions({ type, q: queries[0]||title||'', items: [] });
   return false;
 }
 
-async function suggestLongform({ type='movie', title='', mood='', actor='', limit=SUGGEST_LIMIT_DEFAULT }) {
-  const minSec = (type === 'audiobook') ? AUDIOBOOK_MIN_SEC : LONG_MIN_SEC;
+async function suggestLongform({ type='movie', title='', mood='', actor='', limit=SUGGEST_LIMIT_DEFAULT, minSecOverride }={}) {
+  // P1 fix: учитываем minSecOverride (0 => короткие допустимы)
+  const minSec = (typeof minSecOverride === 'number') ? minSecOverride : (type === 'audiobook' ? AUDIOBOOK_MIN_SEC : LONG_MIN_SEC);
   const queries = composeQueries({ type, title, mood, actor });
   const q = queries[0] || title || actor || mood || (type === 'movie' ? 'full movie' : 'аудиокнига полностью');
 
-  // приоритет — клиентские длинные
+  // приоритет — клиентский список
   const sugg = await suggestLongformClient({ type, title, mood, actor, limit, minSecOverride: minSec });
   if (sugg.length) {
-    dispatchSuggestions({ type, q, items: sugg.map(m => ({ id:m.id, title:m.title, duration:`PT${Math.floor(m.durationSec/3600)}H` })) });
+    const norm = sugg.map(m => ({
+      id: m.id, title: m.title, channel: m.author, duration: m.durationSec ? `PT${Math.floor(m.durationSec/3600)}H` : ''
+    }));
+    dispatchSuggestions({ type, q, items: norm });
     return sugg;
   }
 
-  // сервер только если есть durationSec >= minSec
-  const items = await searchServer(q, minSec);
-  if (Array.isArray(items) && items.length) {
-    const norm = items.map(x => (typeof x === 'string' ? { id:x } : x))
-      .filter(x => x.id)
-      .map(x => ({ ...x, durationSec: x.durationSec||0, title: x.title||x.snippet?.title||'', channel: x.channelTitle||x.author||'', embedOk:true, url: ytWatchUrl(x.id) }))
-      .filter(x => x.durationSec >= minSec);
-    if (norm.length) {
-      dispatchSuggestions({ type, q, items: norm });
-      return norm;
+  // сервер только если требуется порог длительности
+  if (minSec > 0) {
+    const items = await searchServer(q, minSec);
+    if (Array.isArray(items) && items.length) {
+      const norm = items.map(x => (typeof x === 'string' ? { id:x } : x))
+        .filter(x => x.id)
+        .map(x => ({ ...x, durationSec: x.durationSec||0, title: x.title||x.snippet?.title||'', channel: x.channelTitle||x.author||'', embedOk:true, url: ytWatchUrl(x.id) }))
+        .filter(x => x.durationSec >= minSec);
+      if (norm.length) {
+        dispatchSuggestions({ type, q, items: norm });
+        return norm;
+      }
     }
   }
 
-  // НЕТ длинных — шлём пустой результат, UI спросит про короткие
+  // пусто — отдаем пустой результат (UI покажет ссылку/спросит про короткие)
   dispatchSuggestions({ type, q, items: [] });
   return [];
 }
@@ -235,7 +240,7 @@ function dispatchSuggestions(payload) {
   } catch {}
 }
 
-/* ===== Слушатели событий (обязательно) ===== */
+/* ===== Слушатели событий ===== */
 window.addEventListener('assistant:pro.play', (e) => {
   const d = e?.detail || {};
   playLongform(d).catch(err => console.warn('[longform] play error', err));
@@ -245,4 +250,4 @@ window.addEventListener('assistant:pro.suggest', (e) => {
   suggestLongform(d).catch(err => console.warn('[longform] suggest error', err));
 });
 
-console.log('[longform] PRO longform v0.5 ready');
+console.log('[longform] PRO longform v0.5.1 ready');
