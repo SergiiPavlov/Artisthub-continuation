@@ -1,26 +1,40 @@
 /* 
  * chat.longform.merge.js — безопасная встройка PRO логики без правки вашего большого chat.js
- * Версия: 2.1.0 (2025-09-18)
- * Обновления:
- *  - Гарантированное эхо фразы пользователя (в т.ч. «аудиокнига») через отложенное обёртывание processAssistantQuery
- *  - Доп. слушатели универсальных voice-событий ('assistant:voice.result', 'assistant:input.voice')
- *  - Ненавязчивый submit-перехват для текстового ввода
- *  - Поток: сначала длинные видео; если нет — ссылка на YouTube + вопрос про короткие
+ * Версия: 2.4.0 (2025-09-18)
+ * Новое:
+ *  - Воспроизведение по ID через window.Player.play(id) (если доступен), вместо window.loadAndPlayYouTubeVideo
+ *  - Сохранены: «липкая» привязка к UI (MutationObserver), эхо «аудио», эхо по assistant:pro.*, спрос про короткие
  */
 
 import { YTProProvider } from "./yt-pro-provider.js";
 
 const LOG = (...a) => { try { (console.debug||console.log).call(console, "[chat.longform.merge]", ...a)} catch {} };
 
-const FEED_SEL  = '.assistant__feed, .assistant__log, .assistant__messages';
-const FORM_SEL  = '.assistant__form';
-const INPUT_SEL = '.assistant__input, .assistant__text, input[type="text"]';
+const DEFAULT_SELECTORS = {
+  feed:  '.assistant__feed, .assistant__log, .assistant__messages',
+  form:  '.assistant__form, form[action*="assistant"], form[data-role="assistant-form"]',
+  input: '.assistant__input, .assistant__text, input[type="text"], [contenteditable=""], [contenteditable="true"], textarea',
+  send:  '.assistant__send, .assistant__button--send, [data-role="assistant-send"], button[type="submit"]'
+};
+
+function getSelectors() {
+  const cfg = (window.__ASSISTANT_SELECTORS__ || {});
+  return {
+    feed:  cfg.feed  || DEFAULT_SELECTORS.feed,
+    form:  cfg.form  || DEFAULT_SELECTORS.form,
+    input: cfg.input || DEFAULT_SELECTORS.input,
+    send:  cfg.send  || DEFAULT_SELECTORS.send
+  };
+}
 
 const esc = (s) => String(s||'').replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]));
 
+function qs(sel, root=document){ try { return root.querySelector(sel) } catch { return null } }
+
 function addMsg(kind, html) {
   try { if (typeof window.addMsg === 'function') return window.addMsg(kind, html); } catch {}
-  const box = document.querySelector(FEED_SEL);
+  const feedSel = getSelectors().feed;
+  const box = qs(feedSel);
   if (!box) return;
   const div = document.createElement('div');
   div.className = `as-msg as-msg--${kind}`;
@@ -30,7 +44,7 @@ function addMsg(kind, html) {
 }
 function speak(text) { try { if (window.chat?.voice?.enabled && typeof window.chat.voice.say === 'function') window.chat.voice.say(text); } catch {} }
 
-/* ===== Обёртка для processAssistantQuery с отложенной привязкой и авто-повтором ===== */
+/* ===== Эхо processAssistantQuery (отложенная обёртка) ===== */
 (function ensureWrapPAQ(){
   let wrapped = false;
   const wrap = () => {
@@ -44,18 +58,12 @@ function speak(text) { try { if (window.chat?.voice?.enabled && typeof window.ch
     };
     LOG("processAssistantQuery wrapped (echo-first, deferred).");
   };
-  // Пытаемся несколько раз (на случай, если chat.js грузится позже)
   let tries = 0;
-  const t = setInterval(() => {
-    tries++;
-    wrap();
-    if (wrapped || tries >= 60) clearInterval(t); // ~12 секунд по 200мс
-  }, 200);
-  // И ещё попытка при фокусе окна (после ленивых загрузок)
+  const t = setInterval(() => { tries++; wrap(); if (wrapped || tries >= 60) clearInterval(t); }, 200);
   window.addEventListener('focus', wrap, { once: true });
 })();
 
-/* ===== Доп. эхо для голосовых пайплайнов, если они не зовут processAssistantQuery ===== */
+/* ===== Доп. эхо для голосовых пайплайнов ===== */
 window.addEventListener('assistant:voice.result', (e) => {
   const text = e?.detail?.text;
   if (text) addMsg('user', esc(String(text)));
@@ -64,6 +72,31 @@ window.addEventListener('assistant:input.voice', (e) => {
   const text = e?.detail?.text || e?.detail?.transcript;
   if (text) addMsg('user', esc(String(text)));
 });
+
+/* ===== Эхо при assistant:pro.* ===== */
+(function bridgeProEcho(){
+  let lastEcho = "";
+  const echoOnce = (msg) => {
+    const t = (msg||"").trim();
+    if (!t || t === lastEcho) return;
+    lastEcho = t;
+    addMsg('user', esc(t));
+  };
+  window.addEventListener('assistant:pro.play', (e) => {
+    const d = e?.detail || {};
+    const type = d.type === 'audiobook' ? 'аудиокнига' : 'фильм';
+    const title = (d.title||'').trim();
+    if (title) echoOnce(`${type} ${title}`);
+    else echoOnce(type);
+  });
+  window.addEventListener('assistant:pro.suggest', (e) => {
+    const d = e?.detail || {};
+    const type = d.type === 'audiobook' ? 'аудиокнига' : 'фильм';
+    const title = (d.title||'').trim();
+    if (title) echoOnce(`${type} ${title}`);
+    else echoOnce(type);
+  });
+})();
 
 /* ===== Провайдер ===== */
 const provider = new YTProProvider();
@@ -79,7 +112,7 @@ function parseIntent(raw) {
   if (!text) return null;
   const low = text.toLowerCase();
   const hasMovie = /(\bфильм(?:ы)?\b|\bкино\b|\bсериал(?:ы)?\b|\bmovie\b|\bseries\b)/i.test(low);
-  const hasAudio = /(?:\bаудио\s*книг(?:а|и|у)\b|\bкниг(?:а|у)\b|\baudiobook\b)/i.test(low);
+  const hasAudio = /(?:\bаудио\s*книг(?:а|и|у)\b|\bкниг(?:а|у)\b|\baudiobook\b|\bаудио\b|\baudio\b)/i.test(low);
   if (!hasMovie && !hasAudio) return null;
   const needSuggest = /(вариант|подбери|предлож|посоветуй|порекомендуй|suggest|под\s+настроени[ея])/i.test(low);
   const qm = text.match(/["“”«»„‟']([^"“”«»„‟']{2,})["“”«»„‟']/);
@@ -92,7 +125,7 @@ function parseIntent(raw) {
   if (mm) mood = mm[1].trim();
   let title = titleQuoted;
   if (!title) {
-    const m2 = text.match(/(?:фильм(?:ы)?|кино|сериал(?:ы)?|movie|series|audiobook|аудио\s*книг(?:а|и|у)|книг(?:а|у))\s+([^,;.!?]+)$/i);
+    const m2 = text.match(/(?:фильм(?:ы)?|кино|сериал(?:ы)?|movie|series|audiobook|аудио\s*книг(?:а|и|у)|книг(?:а|у)|\bаудио\b|\baudio\b)\s+([^,;.!?]+)$/i);
     if (m2) {
       let t = m2[1];
       t = t.replace(/\s+с\s+.+$/i, "").replace(/\s+with\s+.+$/i, "");
@@ -115,15 +148,20 @@ function fmtDurISO(iso) {
   } catch { return ''; }
 }
 
-function renderList({ items }) {
-  const feed = document.querySelector(FEED_SEL);
+function renderList({ items, type='movie', q='' }) {
+  const feed = qs(getSelectors().feed);
   if (!feed) return;
   const wrap = document.createElement('div');
   wrap.className = 'as-cards';
   if (!items || !items.length) {
     const msg = document.createElement('div');
     msg.className = 'as-cards__empty';
-    msg.innerHTML = `Ничего не нашлось.`;
+    if (type === 'audiobook') {
+      msg.innerHTML = `Полноценная аудиокнига не найдена. ${q ? `Попробуйте на YouTube: <a href="https://www.youtube.com/results?search_query=${encodeURIComponent(q)}" target="_blank" rel="noopener">открыть YouTube</a>.` : ''}`;
+    } else {
+      msg.innerHTML = `Полноценный фильм не найден. ${q ? `Попробуйте на YouTube: <a href="https://www.youtube.com/results?search_query=${encodeURIComponent(q)}" target="_blank" rel="noopener">открыть YouTube</a>.` : ''} Могу показать короткие ролики. Показать?`;
+      setPendingShort({ type: 'movie', title: q||'', mood:'', actor:'' });
+    }
     wrap.appendChild(msg);
     feed.appendChild(wrap); feed.scrollTop = feed.scrollHeight; return;
   }
@@ -150,8 +188,8 @@ function renderList({ items }) {
     if (!btn) return;
     const id = btn.getAttribute('data-id');
     if (!id) return;
-    if (typeof window.loadAndPlayYouTubeVideo === "function") {
-      window.loadAndPlayYouTubeVideo(id, { id });
+    if (window.Player && typeof window.Player.play === "function") {
+      window.Player.play(id);
     } else {
       const w = window.open(`https://www.youtube.com/watch?v=${encodeURIComponent(id)}`,"_blank","noopener");
       if (!w) addMsg('bot', `Откройте видео: https://www.youtube.com/watch?v=${id}`);
@@ -162,87 +200,127 @@ function renderList({ items }) {
   feed.scrollTop = feed.scrollHeight;
 }
 
-/* ===== Submit-поток ===== */
-(function bindForm(){
-  const form = document.querySelector(FORM_SEL);
-  const input = document.querySelector(INPUT_SEL);
-  if (!form || !input) { LOG("form/input not found"); return; }
+/* ===== Слушаем результаты longform и рендерим карточки ===== */
+window.addEventListener('assistant:pro.suggest.result', (e) => {
+  try {
+    const d = e?.detail || {};
+    renderList(d);
+  } catch(err) { console.warn('[chat.longform.merge] render err', err); }
+});
 
-  form.addEventListener('submit', async (ev) => {
-    try {
-      let v = String(input.value||'').trim();
-      if (!v) return;
+/* ===== Основной пайплайн ===== */
+async function handleSubmitText(v) {
+  let value = String(v||'').trim();
+  if (!value) return false;
 
-      // Ответ на «Показать короткие ролики?»
-      if (hasPendingShort()) {
-        const ans = v.toLowerCase();
-        addMsg('user', esc(v));
-        ev.stopPropagation(); ev.preventDefault();
-        if (/^(?:да|ага|угу|yes|sure|ok|okay|конечно|давай|хорошо)\b/.test(ans)) {
-          const ps = window.chat.pendingShort;
-          clearPendingShort();
-          addMsg('note', 'Ищу короткие ролики…'); speak('Ищу короткие ролики');
-          const q = provider.buildQuery({ type: ps.type||'movie', title: ps.title||'', mood:'', actor:'' });
-          const shorts = await provider.searchManyAny(q, 12);
-          if (!shorts.length) {
-            const yurl = provider.buildYouTubeSearchURL(q, ps.type||'movie');
-            addMsg('bot', `Коротких тоже не нашёл. Попробуйте на YouTube: <a href="${yurl}" target="_blank" rel="noopener">открыть YouTube</a>.`);
-          } else {
-            renderList({ items: shorts });
-          }
-        } else if (/^(?:нет|неа|no|не\s+надо|не\s+нужно)\b/.test(ans)) {
-          clearPendingShort();
-          addMsg('bot', 'Хорошо, не показываю короткие ролики.'); speak('Хорошо');
-        } else {
-          clearPendingShort(); // трактуем как новый запрос
-        }
-        return;
+  // Ответы на «короткие ролики»
+  if (hasPendingShort()) {
+    const ans = value.toLowerCase();
+    addMsg('user', esc(value));
+    if (/^(?:да|ага|угу|yes|sure|ok|okay|конечно|давай|хорошо)\b/.test(ans)) {
+      const ps = window.chat.pendingShort;
+      clearPendingShort();
+      addMsg('note', 'Ищу короткие ролики…'); speak('Ищу короткие ролики');
+      const q = provider.buildQuery({ type: ps.type||'movie', title: ps.title||'', mood:'', actor:'' });
+      const shorts = await provider.searchManyAny(q, 12);
+      if (!shorts.length) {
+        const yurl = provider.buildYouTubeSearchURL(q, ps.type||'movie');
+        addMsg('bot', `Коротких тоже не нашёл. Попробуйте на YouTube: <a href="${yurl}" target="_blank" rel="noopener">открыть YouTube</a>.`);
+      } else {
+        renderList({ items: shorts, type: ps.type||'movie', q });
       }
-
-      const intent = parseIntent(v);
-      if (!intent) return; // пусть базовый чат обработает
-      addMsg('user', esc(v));
-      ev.stopPropagation(); ev.preventDefault();
-
-      const q = provider.buildQuery({ type:intent.type, title:intent.title, mood:intent.mood, actor:intent.actor });
-
-      if (intent.needSuggest || !intent.title) {
-        addMsg('note','Подбираю варианты…'); speak('Подбираю варианты');
-        const many = await provider.searchManyLong(q, 12);
-        if (!many.length) {
-          const yurl = provider.buildYouTubeSearchURL(q, intent.type);
-          addMsg('bot', `Длинных видео не найдено. Можно поискать на YouTube: <a href="${yurl}" target="_blank" rel="noopener">открыть YouTube</a>.`);
-          setPendingShort({ type:intent.type, title:intent.title||q });
-          addMsg('bot', 'Показать короткие ролики? (да/нет)');
-          speak('Показать короткие ролики?');
-        } else {
-          renderList({ items: many });
-        }
-        return;
-      }
-
-      addMsg('note', intent.type==='audiobook' ? 'Ищу и включаю аудиокнигу…' : 'Ищу и включаю фильм…');
-      speak(intent.type==='audiobook' ? 'Ищу аудиокнигу' : 'Ищу фильм');
-      const bestLong = await provider.searchOneLong(q, intent.type);
-      if (bestLong) {
-        const id = bestLong.id;
-        if (typeof window.loadAndPlayYouTubeVideo === "function") {
-          window.loadAndPlayYouTubeVideo(id, bestLong);
-        } else {
-          const w = window.open(`https://www.youtube.com/watch?v=${encodeURIComponent(id)}`,"_blank","noopener");
-          if (!w) addMsg('bot', `Откройте видео: https://www.youtube.com/watch?v=${id}`);
-        }
-        return;
-      }
-      const yurl = provider.buildYouTubeSearchURL(q, intent.type);
-      addMsg('bot', `Полную версию найти не удалось. Попробуйте на YouTube: <a href="${yurl}" target="_blank" rel="noopener">открыть YouTube</a>.`);
-      setPendingShort({ type:intent.type, title:intent.title||q });
-      addMsg('bot', 'Показать короткие ролики? (да/нет)');
-      speak('Показать короткие ролики?');
-    } catch(err) {
-      console.warn('[chat.longform.merge] submit err', err);
+    } else if (/^(?:нет|неа|no|не\s+надо|не\s+нужно)\b/.test(ans)) {
+      clearPendingShort();
+      addMsg('bot', 'Хорошо, не показываю короткие ролики.'); speak('Хорошо');
+    } else {
+      clearPendingShort(); // трактуем как новый запрос
     }
-  }, true);
-})();
+    return true; // обработано
+  }
 
-console.log('[chat.longform.merge] ready');
+  const intent = parseIntent(value);
+  if (!intent) return false; // не наше — пусть базовый чат обработает
+  addMsg('user', esc(value));
+
+  // Передаём в longform — он сделает приоритетный клиентский поиск длинных и отправит suggest.result
+  const detail = { type:intent.type, title:intent.title, mood:intent.mood, actor:intent.actor, limit: 12 };
+  if (intent.needSuggest || !intent.title) {
+    window.dispatchEvent(new CustomEvent('assistant:pro.suggest', { detail }));
+    addMsg('note','Подбираю варианты…'); speak('Подбираю варианты');
+    return true;
+  }
+
+  window.dispatchEvent(new CustomEvent('assistant:pro.play', { detail }));
+  addMsg('note', intent.type==='audiobook' ? 'Ищу и включаю аудиокнигу…' : 'Ищу и включаю фильм…');
+  speak(intent.type==='audiobook' ? 'Ищу аудиокнигу' : 'Ищу фильм');
+  return true;
+}
+
+/* ===== Привязка к UI (форма/инпут/кнопка) ===== */
+let bound = false;
+function tryBindOnce() {
+  if (bound) return;
+  const sels = getSelectors();
+  const form  = qs(sels.form) || null;
+  const input = qs(sels.input) || null;
+  const send  = qs(sels.send) || null;
+
+  if (!form && !input && !send) {
+    return; // ещё нет UI
+  }
+
+  // 1) Submit формы (если есть)
+  if (form) {
+    form.addEventListener('submit', async (ev) => {
+      try {
+        const tgt = ev.target;
+        const valNode = qs(sels.input, tgt) || qs(sels.input, document);
+        const value = (valNode && ('value' in valNode ? valNode.value : valNode.textContent)) || '';
+        const handled = await handleSubmitText(value);
+        if (handled) { ev.stopPropagation(); ev.preventDefault(); }
+      } catch (e) { console.warn('[chat.longform.merge] submit err', e); }
+    }, true);
+  }
+
+  // 2) Enter по input (если нет формы)
+  if (input && !form) {
+    input.addEventListener('keydown', async (ev) => {
+      if (ev.key === 'Enter' && !ev.shiftKey && !ev.ctrlKey) {
+        const val = ('value' in input ? input.value : input.textContent) || '';
+        const handled = await handleSubmitText(val);
+        if (handled) { ev.stopPropagation(); ev.preventDefault(); }
+      }
+    }, true);
+  }
+
+  // 3) Клик по send-кнопке (запасной путь)
+  if (send) {
+    send.addEventListener('click', async (ev) => {
+      try {
+        const valNode = qs(sels.input) || document.activeElement;
+        const value = (valNode && ('value' in valNode ? valNode.value : valNode.textContent)) || '';
+        const handled = await handleSubmitText(value);
+        if (handled) { ev.stopPropagation(); ev.preventDefault(); }
+      } catch (e) { console.warn('[chat.longform.merge] send err', e); }
+    }, true);
+  }
+
+  bound = true;
+  LOG("bound to UI:", { form: !!form, input: !!input, send: !!send });
+}
+
+function bootstrapBinding() {
+  tryBindOnce();
+  if (bound) return;
+  const obs = new MutationObserver(() => {
+    if (!bound) tryBindOnce();
+    if (bound) obs.disconnect();
+  });
+  obs.observe(document.documentElement || document.body, { childList: true, subtree: true });
+  window.addEventListener('DOMContentLoaded', tryBindOnce, { once: true });
+  window.addEventListener('load', tryBindOnce, { once: true });
+}
+
+/* ===== Старт ===== */
+bootstrapBinding();
+LOG("ready");
