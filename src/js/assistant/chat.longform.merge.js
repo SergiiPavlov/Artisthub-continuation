@@ -1,9 +1,10 @@
 /* 
  * chat.longform.merge.js — безопасная встройка PRO логики без правки вашего большого chat.js
- * Версия: 2.4.0 (2025-09-18)
- * Новое:
- *  - Воспроизведение по ID через window.Player.play(id) (если доступен), вместо window.loadAndPlayYouTubeVideo
- *  - Сохранены: «липкая» привязка к UI (MutationObserver), эхо «аудио», эхо по assistant:pro.*, спрос про короткие
+ * Версия: 2.6.0 (2025-09-18)
+ * Новое по сравнению с 2.5:
+ *  - Полный перехват processAssistantQuery (голос/ASR путь). Если распознали «фильм/сериал/аудиокнига» —
+ *    сами шлём assistant:pro.play/suggest + watchdog и НЕ зовём оригинал, чтобы не было «Похоже на: …».
+ *  - Дедупликация по последней фразе, чтобы не обрабатывать дважды.
  */
 
 import { YTProProvider } from "./yt-pro-provider.js";
@@ -44,64 +45,10 @@ function addMsg(kind, html) {
 }
 function speak(text) { try { if (window.chat?.voice?.enabled && typeof window.chat.voice.say === 'function') window.chat.voice.say(text); } catch {} }
 
-/* ===== Эхо processAssistantQuery (отложенная обёртка) ===== */
-(function ensureWrapPAQ(){
-  let wrapped = false;
-  const wrap = () => {
-    if (wrapped) return;
-    const original = window.processAssistantQuery;
-    if (typeof original !== "function") return;
-    wrapped = true;
-    window.processAssistantQuery = async function wrappedProcessAssistantQuery(raw) {
-      try { addMsg("user", esc(String(raw))); } catch {}
-      return await original.apply(this, arguments);
-    };
-    LOG("processAssistantQuery wrapped (echo-first, deferred).");
-  };
-  let tries = 0;
-  const t = setInterval(() => { tries++; wrap(); if (wrapped || tries >= 60) clearInterval(t); }, 200);
-  window.addEventListener('focus', wrap, { once: true });
-})();
-
-/* ===== Доп. эхо для голосовых пайплайнов ===== */
-window.addEventListener('assistant:voice.result', (e) => {
-  const text = e?.detail?.text;
-  if (text) addMsg('user', esc(String(text)));
-});
-window.addEventListener('assistant:input.voice', (e) => {
-  const text = e?.detail?.text || e?.detail?.transcript;
-  if (text) addMsg('user', esc(String(text)));
-});
-
-/* ===== Эхо при assistant:pro.* ===== */
-(function bridgeProEcho(){
-  let lastEcho = "";
-  const echoOnce = (msg) => {
-    const t = (msg||"").trim();
-    if (!t || t === lastEcho) return;
-    lastEcho = t;
-    addMsg('user', esc(t));
-  };
-  window.addEventListener('assistant:pro.play', (e) => {
-    const d = e?.detail || {};
-    const type = d.type === 'audiobook' ? 'аудиокнига' : 'фильм';
-    const title = (d.title||'').trim();
-    if (title) echoOnce(`${type} ${title}`);
-    else echoOnce(type);
-  });
-  window.addEventListener('assistant:pro.suggest', (e) => {
-    const d = e?.detail || {};
-    const type = d.type === 'audiobook' ? 'аудиокнига' : 'фильм';
-    const title = (d.title||'').trim();
-    if (title) echoOnce(`${type} ${title}`);
-    else echoOnce(type);
-  });
-})();
-
 /* ===== Провайдер ===== */
 const provider = new YTProProvider();
 
-/* ===== Состояние «pending короткие» ===== */
+/* ===== Pending короткие ===== */
 function hasPendingShort(){ return !!(window.chat && window.chat.pendingShort); }
 function setPendingShort(payload){ if (!window.chat) window.chat = {}; window.chat.pendingShort = payload; }
 function clearPendingShort(){ if (window.chat) window.chat.pendingShort = null; }
@@ -204,57 +151,95 @@ function renderList({ items, type='movie', q='' }) {
 window.addEventListener('assistant:pro.suggest.result', (e) => {
   try {
     const d = e?.detail || {};
+    LOG("result from longform:", d);
     renderList(d);
   } catch(err) { console.warn('[chat.longform.merge] render err', err); }
 });
 
-/* ===== Основной пайплайн ===== */
-async function handleSubmitText(v) {
-  let value = String(v||'').trim();
-  if (!value) return false;
-
-  // Ответы на «короткие ролики»
-  if (hasPendingShort()) {
-    const ans = value.toLowerCase();
-    addMsg('user', esc(value));
-    if (/^(?:да|ага|угу|yes|sure|ok|okay|конечно|давай|хорошо)\b/.test(ans)) {
-      const ps = window.chat.pendingShort;
-      clearPendingShort();
-      addMsg('note', 'Ищу короткие ролики…'); speak('Ищу короткие ролики');
-      const q = provider.buildQuery({ type: ps.type||'movie', title: ps.title||'', mood:'', actor:'' });
-      const shorts = await provider.searchManyAny(q, 12);
-      if (!shorts.length) {
-        const yurl = provider.buildYouTubeSearchURL(q, ps.type||'movie');
-        addMsg('bot', `Коротких тоже не нашёл. Попробуйте на YouTube: <a href="${yurl}" target="_blank" rel="noopener">открыть YouTube</a>.`);
-      } else {
-        renderList({ items: shorts, type: ps.type||'movie', q });
-      }
-    } else if (/^(?:нет|неа|no|не\s+надо|не\s+нужно)\b/.test(ans)) {
-      clearPendingShort();
-      addMsg('bot', 'Хорошо, не показываю короткие ролики.'); speak('Хорошо');
+/* ===== Watchdog-фолбэк ===== */
+const WD = { suggestTimer: null, playTimer: null };
+function planSuggestWatchdog(detail) {
+  if (WD.suggestTimer) clearTimeout(WD.suggestTimer);
+  const { type='movie', title='', mood='', actor='', limit=12 } = (detail||{});
+  const q = provider.buildQuery({ type, title, mood, actor });
+  WD.suggestTimer = setTimeout(async () => {
+    LOG("watchdog: no suggest.result in time — doing provider search", { type, title });
+    const many = await provider.searchManyLong(q, limit);
+    if (many && many.length) {
+      renderList({ items: many, type, q });
     } else {
-      clearPendingShort(); // трактуем как новый запрос
+      const yurl = provider.buildYouTubeSearchURL(q, type);
+      renderList({ items: [], type, q });
+      addMsg('bot', `Длинных видео не найдено. Откройте поиск на YouTube: <a href="${yurl}" target="_blank" rel="noopener">сюда</a>.`);
     }
-    return true; // обработано
-  }
-
-  const intent = parseIntent(value);
-  if (!intent) return false; // не наше — пусть базовый чат обработает
-  addMsg('user', esc(value));
-
-  // Передаём в longform — он сделает приоритетный клиентский поиск длинных и отправит suggest.result
-  const detail = { type:intent.type, title:intent.title, mood:intent.mood, actor:intent.actor, limit: 12 };
-  if (intent.needSuggest || !intent.title) {
-    window.dispatchEvent(new CustomEvent('assistant:pro.suggest', { detail }));
-    addMsg('note','Подбираю варианты…'); speak('Подбираю варианты');
-    return true;
-  }
-
-  window.dispatchEvent(new CustomEvent('assistant:pro.play', { detail }));
-  addMsg('note', intent.type==='audiobook' ? 'Ищу и включаю аудиокнигу…' : 'Ищу и включаю фильм…');
-  speak(intent.type==='audiobook' ? 'Ищу аудиокнигу' : 'Ищу фильм');
-  return true;
+  }, 6000);
 }
+function planPlayWatchdog(detail) {
+  if (WD.playTimer) clearTimeout(WD.playTimer);
+  const { type='movie', title='', mood='', actor='' } = (detail||{});
+  const q = provider.buildQuery({ type, title, mood, actor });
+  WD.playTimer = setTimeout(async () => {
+    LOG("watchdog: play not started — searching best long and playing", { type, title });
+    const best = await provider.searchOneLong(q, type);
+    if (best && best.id) {
+      if (window.Player && typeof window.Player.play === 'function') window.Player.play(best.id);
+      else window.open(`https://www.youtube.com/watch?v=${encodeURIComponent(best.id)}`,"_blank","noopener");
+      addMsg('note', 'Включаю…'); speak('Включаю');
+    } else {
+      const yurl = provider.buildYouTubeSearchURL(q, type);
+      addMsg('bot', `Полную версию найти не удалось. <a href="${yurl}" target="_blank" rel="noopener">Открыть YouTube</a>?`);
+      setPendingShort({ type, title: title||q });
+      addMsg('bot', 'Показать короткие ролики? (да/нет)');
+    }
+  }, 5000);
+}
+
+/* ===== Перехват processAssistantQuery (голосовой путь) ===== */
+let _lastHandled = { text: "", ts: 0 };
+(function interceptPAQ(){
+  let wrapped = false;
+  const wrap = () => {
+    if (wrapped) return;
+    const original = window.processAssistantQuery;
+    if (typeof original !== "function") return;
+    wrapped = true;
+    window.processAssistantQuery = async function wrappedProcessAssistantQuery(raw) {
+      const text = String(raw||"");
+      try { addMsg("user", esc(text)); } catch {}
+      const intent = parseIntent(text);
+      if (intent) {
+        const now = Date.now();
+        if (text === _lastHandled.text && (now - _lastHandled.ts) < 2000) {
+          LOG("PAQ intercept: duplicate, skipping", text);
+          return { handledByPro: true };
+        }
+        _lastHandled = { text, ts: now };
+
+        const detail = { type:intent.type, title:intent.title, mood:intent.mood, actor:intent.actor, limit: 12 };
+        LOG("PAQ intercept: dispatching", detail);
+
+        if (intent.needSuggest || !intent.title) {
+          window.dispatchEvent(new CustomEvent('assistant:pro.suggest', { detail }));
+          addMsg('note','Подбираю варианты…'); speak('Подбираю варианты');
+          planSuggestWatchdog(detail);
+        } else {
+          window.dispatchEvent(new CustomEvent('assistant:pro.play', { detail }));
+          addMsg('note', intent.type==='audiobook' ? 'Ищу и включаю аудиокнигу…' : 'Ищу и включаю фильм…');
+          speak(intent.type==='audiobook' ? 'Ищу аудиокнигу' : 'Ищу фильм');
+          planPlayWatchdog(detail);
+        }
+        return { handledByPro: true };
+      }
+      // не наш кейс — отдаём оригиналу
+      return await original.apply(this, arguments);
+    };
+    LOG("processAssistantQuery intercepted (voice path).");
+  };
+  // Пытаемся несколько раз — вдруг processAssistantQuery появится позже
+  let tries = 0;
+  const iv = setInterval(() => { tries++; wrap(); if (wrapped || tries>=60) clearInterval(iv); }, 200);
+  window.addEventListener('focus', wrap, { once: true });
+})();
 
 /* ===== Привязка к UI (форма/инпут/кнопка) ===== */
 let bound = false;
@@ -265,42 +250,67 @@ function tryBindOnce() {
   const input = qs(sels.input) || null;
   const send  = qs(sels.send) || null;
 
-  if (!form && !input && !send) {
-    return; // ещё нет UI
-  }
+  if (!form && !input && !send) return;
 
-  // 1) Submit формы (если есть)
+  // Submit формы
   if (form) {
     form.addEventListener('submit', async (ev) => {
       try {
         const tgt = ev.target;
         const valNode = qs(sels.input, tgt) || qs(sels.input, document);
         const value = (valNode && ('value' in valNode ? valNode.value : valNode.textContent)) || '';
-        const handled = await handleSubmitText(value);
+        const handled = await (async (v)=>{
+          // используем ту же логику, что и в перехвате PAQ
+          const intent = parseIntent(v);
+          if (!intent) return false;
+          addMsg('user', esc(v));
+          const detail = { type:intent.type, title:intent.title, mood:intent.mood, actor:intent.actor, limit: 12 };
+          if (intent.needSuggest || !intent.title) {
+            window.dispatchEvent(new CustomEvent('assistant:pro.suggest', { detail }));
+            addMsg('note','Подбираю варианты…'); speak('Подбираю варианты'); planSuggestWatchdog(detail);
+          } else {
+            window.dispatchEvent(new CustomEvent('assistant:pro.play', { detail }));
+            addMsg('note', intent.type==='audiobook' ? 'Ищу и включаю аудиокнигу…' : 'Ищу и включаю фильм…');
+            speak(intent.type==='audiobook' ? 'Ищу аудиокнигу' : 'Ищу фильм'); planPlayWatchdog(detail);
+          }
+          return true;
+        })(value);
         if (handled) { ev.stopPropagation(); ev.preventDefault(); }
       } catch (e) { console.warn('[chat.longform.merge] submit err', e); }
     }, true);
   }
 
-  // 2) Enter по input (если нет формы)
+  // Enter по input (если нет формы)
   if (input && !form) {
     input.addEventListener('keydown', async (ev) => {
       if (ev.key === 'Enter' && !ev.shiftKey && !ev.ctrlKey) {
         const val = ('value' in input ? input.value : input.textContent) || '';
-        const handled = await handleSubmitText(val);
+        const handled = !!parseIntent(val);
         if (handled) { ev.stopPropagation(); ev.preventDefault(); }
       }
     }, true);
   }
 
-  // 3) Клик по send-кнопке (запасной путь)
+  // Клик по send-кнопке
   if (send) {
     send.addEventListener('click', async (ev) => {
       try {
         const valNode = qs(sels.input) || document.activeElement;
         const value = (valNode && ('value' in valNode ? valNode.value : valNode.textContent)) || '';
-        const handled = await handleSubmitText(value);
-        if (handled) { ev.stopPropagation(); ev.preventDefault(); }
+        const intent = parseIntent(value);
+        if (intent) {
+          addMsg('user', esc(value));
+          const detail = { type:intent.type, title:intent.title, mood:intent.mood, actor:intent.actor, limit: 12 };
+          if (intent.needSuggest || !intent.title) {
+            window.dispatchEvent(new CustomEvent('assistant:pro.suggest', { detail }));
+            addMsg('note','Подбираю варианты…'); speak('Подбираю варианты'); planSuggestWatchdog(detail);
+          } else {
+            window.dispatchEvent(new CustomEvent('assistant:pro.play', { detail }));
+            addMsg('note', intent.type==='audiobook' ? 'Ищу и включаю аудиокнигу…' : 'Ищу и включаю фильм…');
+            speak(intent.type==='audiobook' ? 'Ищу аудиокнигу' : 'Ищу фильм'); planPlayWatchdog(detail);
+          }
+          ev.stopPropagation(); ev.preventDefault();
+        }
       } catch (e) { console.warn('[chat.longform.merge] send err', e); }
     }, true);
   }
@@ -312,10 +322,7 @@ function tryBindOnce() {
 function bootstrapBinding() {
   tryBindOnce();
   if (bound) return;
-  const obs = new MutationObserver(() => {
-    if (!bound) tryBindOnce();
-    if (bound) obs.disconnect();
-  });
+  const obs = new MutationObserver(() => { if (!bound) tryBindOnce(); if (bound) obs.disconnect(); });
   obs.observe(document.documentElement || document.body, { childList: true, subtree: true });
   window.addEventListener('DOMContentLoaded', tryBindOnce, { once: true });
   window.addEventListener('load', tryBindOnce, { once: true });
