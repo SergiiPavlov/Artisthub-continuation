@@ -12,6 +12,11 @@ import './js/assistant/yt-pro-provider.js';
 import './js/assistant/longform.js';
 import './js/assistant/chat.longform.merge.js';
 import './js/assistant/anchors-safety.js';
+import './js/assistant/patches/p1_preventDefault_fix.js';
+import './js/assistant/patches/pro-longform-server-search.js';
+import './js/assistant/patches/hook_longform_intent_bridge.js';
+import './js/assistant/patches/ui_short_candidate_prompt.js';
+
 
 
 
