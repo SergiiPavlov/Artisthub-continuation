@@ -16,6 +16,8 @@ import './js/assistant/patches/p1_preventDefault_fix.js';
 import './js/assistant/patches/pro-longform-server-search.js';
 import './js/assistant/patches/hook_longform_intent_bridge.js';
 import './js/assistant/patches/ui_short_candidate_prompt.js';
+import './js/assistant/patches/voice_mic_once.android.js';
+
 
 
 

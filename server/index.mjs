@@ -6,6 +6,11 @@ import cookieParser from 'cookie-parser';
 import { registerTTS } from './tts.mjs';
 import { searchIdsFallback, filterEmbeddable } from './search-fallback.mjs';
 
+// ▼ NEW: longform YouTube search route (separate endpoint /api/yt/search-long)
+import registerLongSearch from './patches/yt-longsearch.mjs';
+// ▼ NEW: Permissions-Policy header helper (for mic in iframes / Android)
+import registerPermissionsPolicy from './patches/permissions_policy.mjs';
+
 const app = express();
 const PORT = Number(process.env.PORT || 8787);
 const VERSION = 'server-v4.5.5-2025-09-13';
@@ -39,6 +44,21 @@ const YT_API_KEY = process.env.YT_API_KEY || '';
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
+
+// ▼ NEW: set a conservative Permissions-Policy for microphone (useful if app is embedded)
+registerPermissionsPolicy(app, {
+  origins: [
+    'self',
+    'https://localhost:5173',
+    // добавь свой прод-домен при деплое, например:
+    // 'https://your-domain.example'
+  ]
+});
+
+// ▼ NEW: register server-side long YouTube search (separate endpoint)
+registerLongSearch(app, {
+  YT_API_KEY: process.env.YT_API_KEY || process.env.YOUTUBE_API_KEY || process.env.GOOGLE_API_KEY || YT_API_KEY
+});
 
 // ─── Server TTS (Piper) — условно ──────────────────────────────────────
 const ENABLE_TTS = process.env.ENABLE_TTS_SERVER !== '0' && !!process.env.PIPER_PATH;
@@ -147,7 +167,7 @@ function capitalize(s = '') {
 function normalizeAggressive(s = '') {
   let t = String(s || '');
   try { t = t.normalize('NFC'); } catch {}
-  t = t.replace(/[\u2010-\u2015\u2212]/g, '-').replace(/[“”«»„‟]/g, '"').replace(/[’‘‛]/g, "'");
+  t = t.replace(/[‐-―−]/g, '-').replace(/[“”«»„‟]/g, '"').replace(/[’‘‛]/g, "'");
   t = t.replace(/\u0438\u0306/g, '\u0439').replace(/\u0418\u0306/g, '\u0419');
   t = t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').normalize('NFC');
   t = t.replace(/\u0451/g, '\u0435').replace(/\u0401/g, '\u0415');
@@ -316,7 +336,7 @@ function inferActionsFromUser(text = '') {
     ['soundtrack', 'саундтрек|ost|original soundtrack'],
   ];
   for (const [canon, reStr] of gsyn) {
-    const re = new RegExp(`\\b(?:${reStr})\\b`, 'i');
+    const re = new RegExp(`\b(?:${reStr})\b`, 'i');
     if (re.test(t)) {
       actions.push({ type: 'recommend', genre: canon, autoplay: wantsPlay });
       break;
@@ -684,4 +704,3 @@ app.listen(PORT, () => {
     `Using PRO(base=${LLM.pro.base}, model=${LLM.pro.model}, key=${LLM.pro.key ? 'set' : 'no'}) | FREE(base=${LLM.free.base}, model=${LLM.free.model})  (${VERSION})`
   );
 });
-
