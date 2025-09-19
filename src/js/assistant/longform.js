@@ -253,3 +253,4 @@ window.addEventListener('assistant:pro.play', (e) => { const d = e?.detail || {}
 window.addEventListener('assistant:pro.suggest', (e) => { const d = e?.detail || {}; suggestLongform(d).catch(err => console.warn('[longform] suggest error', err)); });
 
 console.log('[longform] PRO longform v0.5.2 ready');
+
