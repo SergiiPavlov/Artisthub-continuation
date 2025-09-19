@@ -1,13 +1,23 @@
 /**
- * Patch: P1 preventDefault ordering fix (v2, wider intercept)
- * - Stops default submit/send/enter BEFORE any async code (fixes race).
- * - Intercepts more phrasings: фильм/кино/полнометраж(н), длительностью/более часа,
- *   аудиокнига/книга (включи/поставь/слушать).
- * - Dispatches your existing events: assistant:pro.suggest / assistant:pro.play
+ * Patch: P1 preventDefault ordering fix (non-invasive)
+ * Place this file AFTER chat.longform.merge.js in your HTML/entry.
+ * It ensures default form submit / send click / Enter key do not race with PRO flow.
+ *
+ * Strategy:
+ *  - Capture phase listeners stop default immediately when the input clearly contains a longform intent.
+ *  - Then we synchronously dispatch the same custom events your code already uses:
+ *      assistant:pro.suggest  / assistant:pro.play
+ *  - We DO NOT remove your existing handlers — we just prevent the browser default first.
+ *
+ * Assumptions:
+ *  - getSelectors() and qs(selector, root?) exist in global scope (as in your codebase).
+ *  - parseIntent(v) exists and returns {type, title, mood, actor, needSuggest} OR falsy.
+ *  - addMsg, esc, speak, planSuggestWatchdog, planPlayWatchdog exist (no-ops if missing).
  */
-(function patchP1PreventDefault_v2(){
+(function patchP1PreventDefault(){
   try {
-    const w = window, d = document;
+    const w = window;
+    const d = document;
     const S = (w.getSelectors && w.getSelectors()) || {
       form: 'form[data-assistant-chat]',
       input: 'textarea[data-assistant-input], input[data-assistant-input]',
@@ -20,33 +30,9 @@
 
     function safe(fn, ...args){ try { return fn && fn(...args); } catch(e){ /*noop*/ } }
 
-    // Dumb intent extractor (mirrors your parseIntent enough for gating)
-    function roughIntent(vRaw){
-      const v = String(vRaw||'').toLowerCase();
-      if (!v.trim()) return null;
-      const isMovie = /(\bфильм\b|\bкино\b|полнометраж)/i.test(v) || /более\s+(часа|60\s*мин)/i.test(v);
-      const bookHint = /(аудиокнига|аудио\s*книга|книг[ауеы])/i.test(v);
-      const isAudiobook = bookHint && /(включи|поставь|слушать|проиграй|play)/i.test(v);
-      if (!isMovie && !isAudiobook) return null;
-
-      // Try to extract a title in quotes or after keywords
-      let title = '';
-      const qm = vRaw.match(/["“”«»„‟']([^"“”«»„‟']{2,})["“”«»„‟']/);
-      if (qm) title = qm[1].trim();
-      if (!title) {
-        const m2 = vRaw.match(/(?:фильм(?:ы)?|кино|аудио\s*книга|аудиокнига|книга)\s+([^,;.!?]+)$/i);
-        if (m2) {
-          let t = m2[1];
-          t = t.replace(/\s+с\s+.+$/i, "").replace(/\s+with\s+.+$/i, "");
-          title = t.trim();
-        }
-      }
-      return { type: isAudiobook ? 'audiobook' : 'movie', title };
-    }
-
-    function runIntentFlowFromText(v){
+    function runIntentFlow(v){
       const parseIntent = w.parseIntent || null;
-      const intent = (parseIntent ? parseIntent(v) : null) || roughIntent(v);
+      const intent = parseIntent ? parseIntent(v) : null;
       if (!intent) return false;
       safe(w.addMsg, 'user', safe(w.esc, v) || v);
       const detail = { type:intent.type, title:intent.title, mood:intent.mood, actor:intent.actor, limit: 12 };
@@ -63,13 +49,10 @@
     }
 
     function shouldIntercept(value){
-      const v = String(value || '').trim().toLowerCase();
+      const v = String(value || '').trim();
       if (!v) return false;
-      // Broad triggers for longform
-      if (/(\bфильм\b|\bкино\b|полнометраж)/i.test(v)) return true;
-      if (/более\s+(часа|60\s*мин)/i.test(v)) return true;
-      if (/(аудиокнига|аудио\s*книга|книг[ауеы])/i.test(v) && /(включи|поставь|слушать|проиграй|play)/i.test(v)) return true;
-      return false;
+      // quick check to avoid intercepting ordinary chat:
+      return /(\bфильм\b|\bкино\b|audiobook|аудио\s*книга|аудиокниг)/i.test(v);
     }
 
     // Submit (capture)
@@ -79,8 +62,10 @@
           const valNode = qs(S.input, ev.target) || qs(S.input, document);
           const value = (valNode && ('value' in valNode ? valNode.value : valNode.textContent)) || '';
           if (shouldIntercept(value)) {
+            // STOP DEFAULT FIRST — main fix
             ev.stopPropagation(); ev.preventDefault();
-            runIntentFlowFromText(value);
+            // then run longform flow synchronously
+            runIntentFlow(value);
           }
         } catch(e){ /*noop*/ }
       }, true);
@@ -94,7 +79,7 @@
             const val = ('value' in input ? input.value : input.textContent) || '';
             if (shouldIntercept(val)) {
               ev.stopPropagation(); ev.preventDefault();
-              runIntentFlowFromText(val);
+              runIntentFlow(val);
             }
           }
         } catch(e){ /*noop*/ }
@@ -109,13 +94,14 @@
           const value = (valNode && ('value' in valNode ? valNode.value : valNode.textContent)) || '';
           if (shouldIntercept(value)) {
             ev.stopPropagation(); ev.preventDefault();
-            runIntentFlowFromText(value);
+            runIntentFlow(value);
           }
         } catch(e){ /*noop*/ }
       }, true);
     }
-    console.log('[patch] P1 preventDefault v2 active');
+    // Done
+    console.log('[patch] P1 preventDefault fix active');
   } catch (e) {
-    console.warn('[patch] P1 v2 failed', e);
+    console.warn('[patch] P1 fix failed', e);
   }
 })();
