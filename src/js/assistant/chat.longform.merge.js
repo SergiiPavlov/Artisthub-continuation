@@ -213,22 +213,55 @@ function tryBindOnce() {
 function bootstrapBinding(){ tryBindOnce(); if (bound) return; const obs = new MutationObserver(() => { if (!bound) tryBindOnce(); if (bound) obs.disconnect(); }); obs.observe(document.documentElement || document.body, { childList: true, subtree: true }); window.addEventListener('DOMContentLoaded', tryBindOnce, { once: true }); window.addEventListener('load', tryBindOnce, { once: true }); }
 bootstrapBinding(); LOG("ready");
 
+// ==== HARD-GUARD: принудительный роут фильмов/аудиокниг в PRO и глушение "музыка-only" ====
+;(function hardGuardProRoute(){
+  // эвристика — текст похож на запрос фильма/сериала или аудиокниги
+  function looksMovieOrAudio(q){
+    const s = String(q||'').toLowerCase();
+    const isMovie = /(\bфильм(?:ы)?\b|\bкино\b|\bсериал(?:ы)?\b|\bmovie\b|\bseries\b)/i.test(s);
+    const isAudio = /(\bаудио\s*книг(?:а|и|у)\b|\bкниг(?:а|у)\b|\baudiobook\b|\bаудио\b|\baudio\b)/i.test(s);
+    return { isMovie, isAudio, ok: isMovie || isAudio };
+  }
 
-// ---- auto-stop watchdog when player starts (safe, no optional chaining) ----
-;(function(){
+  // маршрутизатор: глушим старые события и шлём PRO-плей
+  function rerouteToPro(ev){
+    try{
+      const d = (ev && ev.detail) || {};
+      const q = d.title || d.query || d.text || d.transcript || d.prompt || '';
+      const { ok, isAudio } = looksMovieOrAudio(q);
+      if (!ok) return; // это не фильм/аудиокнига — пропускаем
+
+      // Глушим дальнейших слушателей (именно в захвате!)
+      ev.stopImmediatePropagation && ev.stopImmediatePropagation();
+      ev.stopPropagation && ev.stopPropagation();
+      ev.preventDefault && ev.preventDefault();
+
+      // Пробрасываем в PRO
+      window.dispatchEvent(new CustomEvent('assistant:pro.play', {
+        detail: { type: isAudio ? 'audiobook' : 'movie', title: q.trim(), limit: 12 }
+      }));
+    }catch{}
+  }
+
+  // Ставим ПЕРВЫМИ (capture: true), чтобы отрубать мгновенный «радио/шортс»-путь
   try {
-    if (typeof window !== 'undefined' && window.addEventListener) {
-      window.addEventListener('AM.player.state', function(e){
+    window.addEventListener('assistant:play',  rerouteToPro, true);
+    window.addEventListener('assistant:radio', rerouteToPro, true);
+    window.addEventListener('assistant:music.play', rerouteToPro, true);
+  } catch {}
+
+  // Мягкий фильтр для надоедливого текста "Доступны только музыкальные треки."
+  (function filterMusicOnlyMessage(){
+    try{
+      const orig = window.addMsg;
+      window.addMsg = function(kind, html){
         try {
-          var st = e && e.detail && e.detail.state;
-          if (st === 1) { // YT.PlayerState.PLAYING
-            if (typeof WD !== 'undefined' && WD.playTimer) {
-              try { clearTimeout(WD.playTimer); } catch (err) {}
-              WD.playTimer = null;
-            }
-          }
-        } catch (err) {}
-      });
-    }
-  } catch (err) {}
+          const text = String(html||'');
+          if (/только музыкальные треки/i.test(text)) return; // не показываем
+        } catch {}
+        return orig ? orig.apply(this, arguments) : undefined;
+      };
+    } catch {}
+  })();
 })();
+

@@ -1,191 +1,162 @@
-/*
-  player-patch.js — patch-v1.4.0-2025-09-09
-  Мост assistant:* ↔ публичное API плеера.
-  Важно: не ломаем контракт событий и Player API.
+/* src/js/artists/features/player-patch.js
+   Bridge Assistant <-> Player & Mini UI helpers
+   v2.4.x + PRO-route guard for movies/audiobooks
+   — no static import; resolve via window.Player to avoid Vite path issues
 */
 
-export default function mountPlayerPatch(player) {
-  try { window.__AM_PLAYER_PATCH_INSTALLED__ = true; } catch {}
+/** tiny log */
+const LOG = (...a) => { try { (console.debug||console.log).call(console, "[player-patch]", ...a) } catch {} };
 
-  if (!player || typeof player !== "object") {
-    console.warn("[player-patch] No player instance provided");
-    return;
+/** ensure single mount */
+let mounted = false;
+
+/** simple de-dupe for noisy events */
+const seen = new Set();
+const dedup = (key, ttl = 800) => {
+  const now = Date.now();
+  for (const k of seen) {
+    const ts = parseInt(k.split("|").pop(), 10);
+    if (now - ts > ttl) seen.delete(k);
   }
+  const stamp = now.toString();
+  const full = `${key}|${stamp}`;
+  if ([...seen].some(k => k.startsWith(`${key}|`))) return true;
+  seen.add(full);
+  setTimeout(() => seen.delete(full), ttl + 50);
+  return false;
+};
 
-  const clamp01 = (x) => Math.max(0, Math.min(1, Number(x) || 0));
-
-  // Разбор ID/URL
-  function toVideoId(urlOrId) {
-    const s = String(urlOrId || "").trim();
-    if (!s) return "";
-    if (/^[A-Za-z0-9_-]{11}$/.test(s)) return s;
-    try {
-      const u = new URL(s, location.href);
-      if (/(^|\.)youtu\.be$/i.test(u.hostname)) {
-        const cand = u.pathname.replace(/^\/+/, "");
-        return /^[A-Za-z0-9_-]{11}$/.test(cand) ? cand : "";
-      }
-      const v = u.searchParams.get("v");
-      if (v && /^[A-Za-z0-9_-]{11}$/.test(v)) return v;
-      const m = u.pathname.match(/\/(?:embed|v|shorts)\/([^/?#]+)/i);
-      if (m && m[1] && /^[A-Za-z0-9_-]{11}$/.test(m[1])) return m[1];
-    } catch {}
-    return "";
-  }
-
-  const MIX_SEEDS = [
-    "random music mix",
-    "popular hits playlist",
-    "indie rock mix",
-    "classic rock hits",
-    "lofi chill beats to relax",
-    "jazz essentials playlist",
-    "hip hop classic mix",
-    "ambient focus music long"
-  ];
-
-  const call = (name, ...args) => {
-    const fn = player?.[name];
-    if (typeof fn === "function") {
-      try { return fn.apply(player, args); }
-      catch (e) { console.warn(`[player-patch] ${name} failed`, e); }
-    }
+/** resolve Player safely (no import) */
+function getPlayer() {
+  try {
+    if (typeof window !== "undefined" && window.Player) return window.Player;
+  } catch {}
+  // noop proxy (prevents crashes if Player ещё не загружен)
+  const noop = () => {};
+  return {
+    open: noop, openQueue: noop, next: noop, prev: noop,
+    play: noop, pause: noop, stop: noop,
+    setVolume: noop, getVolume: () => 0.6,
+    minimize: noop, expand: noop, isActive: () => false,
+    isMinimized: () => false, hasQueue: () => false, close: noop,
+    playSearch: noop, seekTo: noop,
   };
-
-  // Антидубль
-  const recently = new Map();
-  function dedup(key, ttl = 350) {
-    const now = Date.now();
-    const last = recently.get(key) || 0;
-    if (now - last < ttl) return true;
-    recently.set(key, now);
-    return false;
-  }
-
- // === PLAY ===
-window.addEventListener("assistant:play", (e) => {
-  const rawId  = e?.detail?.id ?? "";
-  const query  = e?.detail?.query ?? "";
-  const mtype  = (e?.detail?.mediaType || "").toLowerCase(); // <- добавили
-  const key    = "play|" + JSON.stringify({ rawId, query, mtype });
-  if (dedup(key)) return;
-
-  // 👇 ГАРД: если явно кино/аудиокнига — передаём в PRO-ветку и выходим
-  if (mtype === "movie" || mtype === "audiobook") {
-    try {
-      window.dispatchEvent(new CustomEvent("assistant:pro.play", {
-        detail: { type: mtype, title: query || rawId }
-      }));
-    } catch {}
-    return;
-  }
-
-  const vid = toVideoId(rawId);
-  if (vid) {
-    call("open", vid);
-  } else if (query && player.playSearch) {
-    call("playSearch", query);
-  } else if (rawId) {
-    call("playSearch", String(rawId));
-  }
-});
-
-
-  // === MIXRADIO ===
-  window.addEventListener("assistant:mixradio", () => {
-    if (document.querySelector("#random-radio")) return;
-    const seed = MIX_SEEDS[(Math.random() * MIX_SEEDS.length) | 0];
-    if (player.playSearch) call("playSearch", seed);
-  });
-
-  // === TRANSPORT ===
-  window.addEventListener("assistant:player-play",  () => call("play"));
-  window.addEventListener("assistant:player-pause", () => call("pause"));
-  window.addEventListener("assistant:player-stop",  () => call("stop"));
-  window.addEventListener("assistant:player-next",  () => call("next"));
-  window.addEventListener("assistant:player-prev",  () => call("prev"));
-
-  // === UI ===
-  window.addEventListener("assistant:minimize", () => call("minimize"));
-  window.addEventListener("assistant:expand",   () => call("expand"));
-
-  // === ГРОМКОСТЬ ===
-  window.addEventListener("assistant:volume", (e) => {
-    const d = Number(e?.detail?.delta || 0);
-    if (!Number.isFinite(d)) return;
-    if (typeof player.getVolume === "function" && typeof player.setVolume === "function") {
-      const cur = Number(player.getVolume() || 0);
-      call("setVolume", clamp01(cur + d));
-    }
-  });
-
-  // === RECOMMEND (autoplay) ===
-  window.addEventListener("assistant:recommend", (e) => {
-    const a = e?.detail || {};
-    if (!a || a.autoplay !== true) return;
-
-    const looksLikeTrack = (s) => {
-      const t = String(s || "").toLowerCase();
-      return /["«»“”„‟]/.test(s) || t.includes(' - ') || /(official|audio|video|lyrics|remaster)/.test(t);
-    };
-
-    let q = "";
-    if (a.like) {
-      const like = String(a.like).trim();
-      if (!like) return;
-      // если похоже на конкретный трек → одиночный трек
-      // иначе — хиты артиста (плейлист)
-      q = looksLikeTrack(like)
-        ? `${like} official audio`
-        : `${like} greatest hits playlist`;
-    } else if (a.genre) {
-      const map = new Map([
-        ["джаз", "best jazz music relaxing"],
-        ["рок", "classic rock hits"],
-        ["поп", "pop hits playlist"],
-        ["электрон", "edm house techno mix"],
-        ["lofi", "lofi hip hop radio"],
-        ["классик", "classical symphony playlist"],
-        ["рэп", "hip hop playlist"],
-        ["инди", "indie rock playlist"],
-        ["ambient", "ambient music long playlist"],
-        ["блюз", "best blues songs playlist"],
-        ["шансон", "russian chanson mix"],
-        ["folk", "folk acoustic playlist"],
-        ["rnb", "rnb soul classics playlist"],
-        ["latin", "latin hits playlist"],
-        ["reggae", "best reggae mix"],
-        ["k-pop", "kpop hits playlist"],
-        ["j-pop", "jpop hits playlist"],
-        ["soundtrack", "movie soundtrack playlist"]
-      ]);
-      q = map.get(String(a.genre).toLowerCase()) || `${a.genre} music playlist`;
-    } else if (a.mood) {
-      const moods = new Map([
-        ["happy", "upbeat feel good hits"],
-        ["calm", "chillout ambient relaxing playlist"],
-        ["sad", "sad indie playlist"],
-        ["energetic", "energetic edm gym playlist"]
-      ]);
-      q = moods.get(String(a.mood).toLowerCase()) || "music playlist";
-    }
-
-    if (q && player.playSearch) call("playSearch", q);
-  });
-
-  // Совместимость doc→win, если нет внешнего bridge
-  if (!(typeof window !== 'undefined' && window.__AH_BRIDGE_PRESENT === true)) {
-    document.addEventListener("assistant:play",       (e) => window.dispatchEvent(new CustomEvent("assistant:play",       { detail: e.detail })));
-    document.addEventListener("assistant:mixradio",   (e) => window.dispatchEvent(new CustomEvent("assistant:mixradio",   { detail: e.detail })));
-    document.addEventListener("assistant:player-play",(e) => window.dispatchEvent(new CustomEvent("assistant:player-play",{ detail: e.detail })));
-    document.addEventListener("assistant:player-pause",(e)=> window.dispatchEvent(new CustomEvent("assistant:player-pause",{ detail: e.detail })));
-    document.addEventListener("assistant:player-stop",(e) => window.dispatchEvent(new CustomEvent("assistant:player-stop",{ detail: e.detail })));
-    document.addEventListener("assistant:player-next",(e) => window.dispatchEvent(new CustomEvent("assistant:player-next",{ detail: e.detail })));
-    document.addEventListener("assistant:player-prev",(e) => window.dispatchEvent(new CustomEvent("assistant:player-prev",{ detail: e.detail })));
-    document.addEventListener("assistant:minimize",   (e) => window.dispatchEvent(new CustomEvent("assistant:minimize",   { detail: e.detail })));
-    document.addEventListener("assistant:expand",     (e) => window.dispatchEvent(new CustomEvent("assistant:expand",     { detail: e.detail })));
-    document.addEventListener("assistant:volume",     (e) => window.dispatchEvent(new CustomEvent("assistant:volume",     { detail: e.detail })));
-    document.addEventListener("assistant:recommend",  (e) => window.dispatchEvent(new CustomEvent("assistant:recommend",  { detail: e.detail })));
-  }
 }
 
+/* utils */
+function on(evt, fn){ try { window.addEventListener(evt, (e)=>{ try { fn(e) } catch (err) {} }); } catch {} }
+function toVideoId(v){
+  const s = String(v||"").trim();
+  if (/^[A-Za-z0-9_-]{11}$/.test(s)) return s;
+  try {
+    const u = new URL(s, location.href);
+    if (/(^|\.)youtu\.be$/i.test(u.hostname)) {
+      const cand = u.pathname.replace(/^\/+/, "");
+      return /^[A-Za-z0-9_-]{11}$/.test(cand) ? cand : "";
+    }
+    const qv = u.searchParams.get("v");
+    if (qv && /^[A-Za-z0-9_-]{11}$/.test(qv)) return qv;
+    const m = u.pathname.match(/\/(?:embed|shorts|v)\/([^/?#]+)/i);
+    if (m && m[1] && /^[A-Za-z0-9_-]{11}$/.test(m[1])) return m[1];
+  } catch {}
+  return "";
+}
+
+export default function mountPlayerPatch(player) {
+  if (mounted) return;
+  mounted = true;
+
+  // resolve Player lazily
+  player = player || getPlayer();
+
+  const call = (fn, ...args) => {
+    try { if (player && typeof player[fn] === "function") return player[fn](...args); }
+    catch (e) { console.warn("[player-patch] call error", fn, e); }
+  };
+
+  // ---- assistant:play  ------------------------------------------------------
+  // Раньше сразу уводил в YT search → «коротыши». Теперь — умный маршрут.
+  window.addEventListener("assistant:play", (e) => {
+    try {
+      const d = e && e.detail || {};
+      const rawId = d.id || d.videoId || d.url || d.source || "";
+      const query = (typeof d.query === "string" ? d.query : (typeof d.title === "string" ? d.title : "")).trim();
+      const mtype = (d.mediaType || d.type || "").trim().toLowerCase();
+
+      const key    = "play|" + JSON.stringify({ rawId, query, mtype });
+      if (dedup(key)) return;
+
+      // 1) Явный тип: сразу в PRO и выходим
+      if (mtype === "movie" || mtype === "audiobook") {
+        try {
+          window.dispatchEvent(new CustomEvent("assistant:pro.play", {
+            detail: { type: mtype, title: query || rawId }
+          }));
+        } catch {}
+        return;
+      }
+
+      // 2) ФАЗЗИ-ГАРД: нет id, но похоже на фильм/сериал/аудиокнигу → в PRO
+      if (!rawId && query) {
+        try {
+          const low = query.toLowerCase();
+          const isMovie = /(\bфильм(?:ы)?\b|\bкино\b|\bсериал(?:ы)?\b|\bmovie\b|\bseries\b)/i.test(low);
+          const isAudio = /(\bаудио\s*книг(?:а|и|у)\b|\bкниг(?:а|и|у)\b|\baudiobook\b|\bаудио\b|\baudio\b)/i.test(low);
+          if (isMovie || isAudio) {
+            window.dispatchEvent(new CustomEvent("assistant:pro.play", {
+              detail: { type: isAudio ? "audiobook" : "movie", title: query }
+            }));
+            return;
+          }
+        } catch {}
+      }
+
+      // 3) Музыка/прочее — старый безопасный путь
+      const vid = toVideoId(rawId);
+      if (vid) {
+        call("open", vid);
+      } else if (query && player.playSearch) {
+        call("playSearch", query);
+      } else if (rawId) {
+        call("playSearch", String(rawId));
+      }
+    } catch (err) {
+      console.warn("[assistant:play] handler error:", err);
+    }
+  });
+
+  // ---- assistant:pro.play  --------------------------------------------------
+  // PRO-ветка от longform/поиска: её обрабатывает longform-слой;
+  // здесь — только "бридж-лог", чтобы понимать, что маршрут сработал.
+  window.addEventListener("assistant:pro.play", async (e) => {
+    const d = e && e.detail || {};
+    try {
+      if (!d || !d.title) return;
+      LOG("assistant:pro.play bridged", d);
+      // дальше всё делает pro-longform-server-search.js → карточки → Player.open/openQueue
+    } catch (err) {
+      console.warn("[assistant:pro.play] bridge error:", err);
+    }
+  });
+
+  // ---- assistant:openQueue --------------------------------------------------
+  window.addEventListener("assistant:openQueue", (e) => {
+    try {
+      const d = e && e.detail || {};
+      const ids = Array.isArray(d?.ids) ? d.ids : [];
+      if (ids.length) call("openQueue", ids, { shuffle:false, startIndex:0 });
+    } catch (err) { console.warn("[assistant:openQueue] error", err); }
+  });
+
+  // ---- trivial controls -----------------------------------------------------
+  on("assistant:pause", () => call("pause"));
+  on("assistant:play.resume", () => call("play"));
+  on("assistant:stop", () => call("stop"));
+  on("assistant:next", () => call("next"));
+  on("assistant:prev", () => call("prev"));
+  on("assistant:minimize", () => call("minimize"));
+  on("assistant:expand",   () => call("expand"));
+  on("assistant:setVolume01", (e) => { const x = (e?.detail?.value ?? 0); call("setVolume", x); });
+
+  LOG("mounted");
+}
