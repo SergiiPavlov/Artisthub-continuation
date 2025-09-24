@@ -3,7 +3,7 @@ import { API_BASE } from '../../assistant/apiBase.js';
 /* global YT */
 
 /**
- * Mini YouTube player (superset, v2.4.0) — build: prev-next-history v2 (2025-09-15)
+ * Mini YouTube player (superset, v2.4.0) — resume-hook — build: prev-next-history v2 (2025-09-15)
  * 
  * Правки в этой сборке:
  * - Жёсткая история для режима listType:"search" (YT searchMode) с безопасной навигацией назад/вперёд.
@@ -372,6 +372,9 @@ export function createMiniPlayer() {
       uiSetTime(cur, duration);
       lastProgressT = Date.now();
       lastProgressV = cur;
+    
+      // resume.js hook: notify current progress for persistence
+      emit("progress", { current: cur, duration });
     }, 250);
   }
   function clearWatchdog() { if (watchdogId) { clearTimeout(watchdogId); watchdogId = null; } }
@@ -910,6 +913,11 @@ armStuckGuard();
     try { yt?.stopVideo?.(); } catch {}
     uiPlayIcon(false); setBubblePulse(false);
   }
+
+  function seekTo(sec) {
+    try { yt?.seekTo?.(Number(sec) || 0, true); } catch {}
+  }
+
   function setVolume01(x) {
     const v = clamp(Math.round((Number(x)||0)*100), 0, 100);
     volVal = v; vol.value = String(v);
@@ -973,7 +981,8 @@ armStuckGuard();
     open, openQueue, next, prev,
     play, pause, stop, setVolume: setVolume01, getVolume: getVolume01, expand,
     minimize, isActive, isMinimized, hasQueue, close,
-    playSearch
+    playSearch,
+    seekTo
   };
   return _instance;
 }
@@ -998,6 +1007,7 @@ const Player = {
   hasQueue:   () => get().hasQueue(),
   close:      () => get().close(),
   playSearch: (q) => get().playSearch(q),
+  seekTo:     (s) => get().seekTo(s),
 };
 
 export default Player;
