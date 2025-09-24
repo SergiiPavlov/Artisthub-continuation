@@ -1518,7 +1518,25 @@ try {
       return "Таймер отменён";
     }
 
+    
     if (/play|плей|включи|вруби|сыграй/.test(text)) {
+      // --- Pro redirect for movies/audiobooks ---
+      const hasMovie = /(\bфильм(?:ы)?\b|\bкино\b|\bсериал(?:ы)?\b|\bмультфильм(?:ы)?\b|\bмульт\b|movie|series|cartoon)/i.test(text);
+      const hasAudio = /(\bаудио\s*книг(?:а|и|у)\b|\bаудиокниг(?:а|и|у)\b|\baudiobook\b)/i.test(text);
+      if (hasMovie || hasAudio) {
+        const raw = text.replace(/^(?:включи|поставь|запусти|play|вруби|сыграй)\s*/i, "").trim();
+        const title = raw
+          .replace(/\b(полны[йеая]|full(?:\s*movie)?|повная|повний|повна)\b/gi, "")
+          .replace(/\b(фильмы?|кино|сериалы?|мультфильмы?|мульт)\b/gi, "")
+          .replace(/["«»„‟“”'`]/g, "")
+          .trim();
+        const type = hasAudio ? "audiobook" : "movie";
+        window.dispatchEvent(new CustomEvent("assistant:pro.play", { detail: { type, title, limit: 12 } }));
+        addMsg("note", type==="audiobook" ? "Ищу и включаю аудиокнигу…" : "Ищу и включаю фильм…");
+        try { if (window.chat && window.chat.voice?.enabled) window.chat.voice.say(type==="audiobook" ? "Ищу аудиокнигу" : "Ищу фильм"); } catch {}
+        return type==="audiobook" ? "Ищу и включаю аудиокнигу…" : "Ищу и включаю фильм…";
+      }
+      // --- music fallback (as before) ---
       if (chat.lastIds.length) {
         dispatch("play", { id: chat.lastIds[0] });
       } else {
@@ -1532,6 +1550,7 @@ try {
       manualPauseGuardUntil = 0;
       return "Играю";
     }
+
 
     if (/тише|quieter|volume down|поменьше/.test(text)) {
       dispatch("volume", { delta: -0.1 });
@@ -1552,18 +1571,34 @@ try {
       return "Mix Radio";
     }
 
+    
     if (/^(?:включи|поставь|запусти|найди|знайди)\s+.+/i.test(text)) {
-      const like = text.replace(/^(?:включи|поставь|запусти|найди|знайди)\s+/i, "").trim();
-      if (like) {
-        chat.lastQuery = like;
-        await cQueue.refill(like);
+      const likeRaw = text.replace(/^(?:включи|поставь|запусти|найди|знайди)\s+/i, "").trim();
+      if (likeRaw) {
+        const hasMovie = /(\bфильм(?:ы)?\b|\bкино\b|\bсериал(?:ы)?\b|\bмультфильм(?:ы)?\b|\bмульт\b|movie|series|cartoon)/i.test(likeRaw);
+        const hasAudio = /(\bаудио\s*книг(?:а|и|у)\b|\bаудиокниг(?:а|и|у)\b|\baudiobook\b)/i.test(likeRaw);
+        if (hasMovie || hasAudio) {
+          const title = likeRaw
+            .replace(/\b(полны[йеая]|full(?:\s*movie)?|повная|повний|повна)\b/gi, "")
+            .replace(/\b(фильмы?|кино|сериалы?|мультфильмы?|мульт)\b/gi, "")
+            .replace(/["«»„‟“”'`]/g, "")
+            .trim();
+          const type = hasAudio ? "audiobook" : "movie";
+          window.dispatchEvent(new CustomEvent("assistant:pro.suggest", { detail: { type, title, limit: 12 } }));
+          addMsg("note", type==="audiobook" ? "Подбираю аудиокнигу…" : "Подбираю варианты фильма…");
+          try { if (window.chat && window.chat.voice?.enabled) window.chat.voice.say(type==="audiobook" ? "Подбираю аудиокнигу" : "Подбираю варианты фильма"); } catch {}
+          return "Подбираю варианты…";
+        }
+        chat.lastQuery = likeRaw;
+        await cQueue.refill(likeRaw);
         const id = cQueue.take();
         if (id) dispatch("play", { id });
-        else dispatch("play", { query: like, exclude: recent.list(), shuffle: true });
+        else dispatch("play", { query: likeRaw, exclude: recent.list(), shuffle: true });
         manualPauseGuardUntil = 0;
         return "Шукаю та вмикаю…";
       }
     }
+
 
     const moods = [
       { re: /(весел|радіс|радост|happy|joy)/, mood: "happy" },
@@ -1635,7 +1670,7 @@ try {
       return "Включаю из своих рекомендаций";
     }
 
-    return "Я тут. Могу переключать вид, управлять треком и подбирать музыку по настроению.";
+    return "Я тут. Помогаю с фильмами, музыкой и аудиокнигами: могу подобрать варианты и включить воспроизведение.";
   }
 
   // ─── Mic + Wake word (с дебаунсом результатов SR) ────────────────────
@@ -1836,3 +1871,31 @@ try {
     isOn: () => { try { return !!chkWake?.checked; } catch { return false; } }
   };
 })();
+
+// ==== Global guard: re-route movie/audiobook "play" to pro to avoid shorts ====
+;(function(){
+  try {
+    if (typeof window !== 'undefined' && window.addEventListener) {
+      window.addEventListener('assistant:play', function(e){
+        try {
+          const d = (e && e.detail) || {};
+          if (d && !d.id && typeof d.query === "string") {
+            const q = d.query.toLowerCase();
+            const isMovie = /(\bфильм(?:ы)?\b|\bкино\b|\bсериал(?:ы)?\b|\bмультфильм(?:ы)?\b|\bмульт\b|movie|series|cartoon)/i.test(q);
+            const isAudio = /(\bаудио\s*книг(?:а|и|у)\b|\bаудиокниг(?:а|и|у)\b|\baudiobook\b)/i.test(q);
+            if (isMovie || isAudio) {
+              const title = q
+                .replace(/\b(полны[йеая]|full(?:\s*movie)?|повная|повний|повна)\b/gi, "")
+                .replace(/\b(фильмы?|кино|сериалы?|мультфильмы?|мульт)\b/gi, "")
+                .trim();
+              const type = isAudio ? "audiobook" : "movie";
+              e.stopImmediatePropagation && e.stopImmediatePropagation();
+              e.preventDefault && e.preventDefault();
+              window.dispatchEvent(new CustomEvent('assistant:pro.play', { detail: { type, title, limit: 12 } }));
+            }
+          }
+        } catch (_){}
+      }, true);
+    }
+  } catch(_){}
+})();    

@@ -92,14 +92,13 @@ export class YTProProvider {
 
   async searchOneLong(q, type="movie") {
     try {
+      // Ищем ТОЛЬКО длинные (longOnly = true). Если нет — возвращаем null.
       let arr = await this.serverSearch(q, { type, longOnly: true, limit: 15 });
       if (!arr.length) arr = await this.ytSearch(q, { longOnly: true, limit: 15 });
-      if (!arr.length) {
-        arr = await this.serverSearch(q, { type, longOnly: false, limit: 15 });
-        if (!arr.length) arr = await this.ytSearch(q, { longOnly: false, limit: 15 });
-      }
       return arr[0] || null;
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   }
 
   async searchManyLong(q, limit=12) {

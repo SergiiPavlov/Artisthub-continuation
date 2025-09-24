@@ -62,22 +62,34 @@ export default function mountPlayerPatch(player) {
     return false;
   }
 
-  // === PLAY ===
-  window.addEventListener("assistant:play", (e) => {
-    const rawId  = e?.detail?.id ?? "";
-    const query  = e?.detail?.query ?? "";
-    const key    = "play|" + JSON.stringify({ rawId, query });
-    if (dedup(key)) return;
+ // === PLAY ===
+window.addEventListener("assistant:play", (e) => {
+  const rawId  = e?.detail?.id ?? "";
+  const query  = e?.detail?.query ?? "";
+  const mtype  = (e?.detail?.mediaType || "").toLowerCase(); // <- добавили
+  const key    = "play|" + JSON.stringify({ rawId, query, mtype });
+  if (dedup(key)) return;
 
-    const vid = toVideoId(rawId);
-    if (vid) {
-      call("open", vid);
-    } else if (query && player.playSearch) {
-      call("playSearch", String(query));
-    } else if (rawId) {
-      call("playSearch", String(rawId));
-    }
-  });
+  // 👇 ГАРД: если явно кино/аудиокнига — передаём в PRO-ветку и выходим
+  if (mtype === "movie" || mtype === "audiobook") {
+    try {
+      window.dispatchEvent(new CustomEvent("assistant:pro.play", {
+        detail: { type: mtype, title: query || rawId }
+      }));
+    } catch {}
+    return;
+  }
+
+  const vid = toVideoId(rawId);
+  if (vid) {
+    call("open", vid);
+  } else if (query && player.playSearch) {
+    call("playSearch", query);
+  } else if (rawId) {
+    call("playSearch", String(rawId));
+  }
+});
+
 
   // === MIXRADIO ===
   window.addEventListener("assistant:mixradio", () => {

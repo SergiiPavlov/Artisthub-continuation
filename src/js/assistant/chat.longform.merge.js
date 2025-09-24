@@ -212,3 +212,23 @@ function tryBindOnce() {
 }
 function bootstrapBinding(){ tryBindOnce(); if (bound) return; const obs = new MutationObserver(() => { if (!bound) tryBindOnce(); if (bound) obs.disconnect(); }); obs.observe(document.documentElement || document.body, { childList: true, subtree: true }); window.addEventListener('DOMContentLoaded', tryBindOnce, { once: true }); window.addEventListener('load', tryBindOnce, { once: true }); }
 bootstrapBinding(); LOG("ready");
+
+
+// ---- auto-stop watchdog when player starts (safe, no optional chaining) ----
+;(function(){
+  try {
+    if (typeof window !== 'undefined' && window.addEventListener) {
+      window.addEventListener('AM.player.state', function(e){
+        try {
+          var st = e && e.detail && e.detail.state;
+          if (st === 1) { // YT.PlayerState.PLAYING
+            if (typeof WD !== 'undefined' && WD.playTimer) {
+              try { clearTimeout(WD.playTimer); } catch (err) {}
+              WD.playTimer = null;
+            }
+          }
+        } catch (err) {}
+      });
+    }
+  } catch (err) {}
+})();

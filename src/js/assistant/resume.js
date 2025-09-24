@@ -109,12 +109,12 @@
     div.className = "am-resume";
     div.innerHTML = `
       <div class="am-resume__txt">
-        <div>Продолжить <span class="am-resume__title">«${esc(e.title || "Аудио/видео")}»</span> с ${esc(fmt(e.pos))}?</div>
+        <div>Продовжити <span class="am-resume__title">«${esc(e.title || "Аудіо/відео")}»</span> с ${esc(fmt(e.pos))}?</div>
       </div>
       <div class="am-resume__btns">
-        <button class="am-resume__btn" data-act="resume">Продолжить</button>
-        <button class="am-resume__btn" data-act="restart">Сначала</button>
-        <button class="am-resume__x" title="Скрыть" data-act="dismiss">×</button>
+        <button class="am-resume__btn" data-act="resume">Продовжити</button>
+        <button class="am-resume__btn" data-act="restart">Спочатку</button>
+        <button class="am-resume__x" title="Приховати" data-act="dismiss">×</button>
       </div>
     `.trim();
     document.body.appendChild(div);
