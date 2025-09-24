@@ -26,6 +26,16 @@
   const wrap = document.createElement('div');
   wrap.className = 'assistant-help__wrap';
   wrap.innerHTML = `
+  <div class="assistant-help__hdr">
+    <div class="assistant-help__title">How to use the chat</div>
+    <div class="assistant-help__langbar" role="tablist" aria-label="Language">
+      <button class="langbtn" data-set-lang="en" role="tab" aria-selected="true">English</button>
+      <button class="langbtn" data-set-lang="uk" role="tab" aria-selected="false">Українська</button>
+    </div>
+    <button class="assistant-help__close" type="button" aria-label="Close">✕</button>
+  </div>
+  <div class="assistant-help__body">
+    <div class="assistant-help__content" data-lang="en">
     <div class="assistant-help__hdr">
       <div class="assistant-help__title">How to use the chat</div>
       <button class="assistant-help__close" type="button" aria-label="Close">✕</button>
@@ -92,7 +102,80 @@
         <li>Check the green <code>AI</code> badge and that <code>window.API_BASE</code> points to your server.</li>
       </ul>
     </div>
-  `;
+  
+<h3 id="movies">Movies & audiobooks (long‑form)</h3>
+<p>Ask for long videos and you’ll get a list of cards with <b>Play</b> and <b>Open on YouTube</b>. Examples:</p>
+<ul>
+  <li><code>find movies</code>, <code>show movies</code>, <code>full movie: “The Irony of Fate”</code></li>
+  <li><code>find audiobooks</code>, <code>show audiobooks</code>, <code>audiobook: “Stephen King Misery”</code></li>
+</ul>
+<p>You can also write in Russian like <i>«Найди/покажи фильмы»</i> or <i>«Найди/покажи аудиокниги»</i> — cards will appear and you can choose what to watch/listen to.</p>
+<p>Tip: if you only see short clips, add words like <code>full movie</code> / <code>long</code>, or provide a specific title.</p>
+
+<h3 id="chat">Discussing music, films and books</h3>
+<p>The assistant can discuss music, give <b>artist biographies</b>, and talk about <b>plots of movies and books</b>, and suggest what to listen to or watch.</p>
+</div>
+    
+<div class="assistant-help__content" data-lang="uk" style="display:none">
+  <h3>Основи</h3>
+  <ul>
+    <li><code>включи рок / джаз / поп</code> — запустить підбір за жанром;</li>
+    <li><code>гучніше / тихіше</code> — змінити гучність;</li>
+    <li><code>пауза / наступний / попередній</code> — керування плеєром;</li>
+    <li><code>згорнути / розгорнути вікно</code> — керування плеєром;</li>
+    <li><code>увімкни Mix-radio</code> — вмикає Mix-radio;</li>
+    <li><code>включи Queen/щось схоже на Queen</code> — підбір за схожістю;</li>
+  </ul>
+  <h3>Жанри та категорії</h3>
+  <p>Працюють популярні жанри (рок, поп, хіп‑хоп, електроніка, джаз, класика, інді, lo‑fi, ambient тощо).</p>
+  <h3>За настроєм</h3>
+  <p><code>щось спокійне</code>, <code>енергійне</code>, <code>сумне</code>, <code>щасливе</code>.</p>
+  <h3>Таймери</h3>
+  <p><code>вимкни/зроби паузу через 30 хв</code>, <code>постав таймер на годину</code>.</p>
+  <h3>Голосове керування</h3>
+  <p>Підтримується «натиснув і говори» на кнопку мікрофона та/або активація ключовим словом  «ді джей/dj». Наприклад - «ді джей, постав Мадонну» (активується у налаштуваннях чата) </p>
+  
+<h3 id="movies">Фільми та аудіокниги (довгі відео)</h3>
+<p>Попросіть довгі відео — отримаєте список карток із кнопками <b>Грати</b> та <b>Відкрити на YouTube</b>. Приклади:</p>
+<ul>
+  <li><code>знайди фільми</code>, <code>покажи фільми</code>, <code>повний фільм: комедії</code></li>
+  <li><code>знайди аудіокниги</code>, <code>покажи аудіокниги</code>, <code>аудіокнига: «Стівен Кінг Зелена миля»</code></li>
+</ul>
+<p>Також спрацюють русифіковані запити типу <i>«Найди/покажи фильмы»</i> або <i>«Найди/покажи аудиокниги»</i> — з’являться картки, і ви зможете вибрати що слухати/дивитися.</p>
+<p>Порада: якщо показує лише короткі ролики, додайте слова на кшталт <code>повний фільм</code> / <code>довге</code> або вкажіть конкретну назву.</p>
+
+  
+<h3 id="chat">Обговорення музики, фільмів і книг</h3>
+<p>ШІ може обговорювати музику, давати <b>біографії артистів</b>, переказувати та обговорювати <b>сюжети фільмів і книг</b>, рекомендувати, що послухати або подивитися.</p>
+
+  <h3>Поради з голосу</h3>
+  <ul>
+    <li>Говоріть чітко й короткими фразами. Додавайте назви або ключові слова.</li>
+    <li>Якщо отримуєте не те — уточніть запит: «повний фільм», «довга аудіокнига», «1970‑ті» тощо.</li>
+  </ul>
+  
+  <h3 id="faq">Питання та конфіденційність</h3>
+  <p>Ми мінімізуємо дані та куки, потрібні лише для роботи плеєра та персоналізації. Детальні правила — у політиці конфіденційності вашого додатка.</p>
+</div>
+
+  </div>
+`;
+  // Language toggle for help
+  (function(){
+    const body = wrap.querySelector('.assistant-help__body');
+    const btns = wrap.querySelectorAll('.langbtn');
+    function apply(lang){
+      body.querySelectorAll('[data-lang]').forEach(el => {
+        el.style.display = (el.getAttribute('data-lang')===lang) ? 'block' : 'none';
+      });
+      btns.forEach(b => b.setAttribute('aria-selected', b.dataset.setLang===lang ? 'true' : 'false'));
+      try { localStorage.setItem('assistant.help.lang', lang); } catch {}
+    }
+    const saved = (function(){ try { return localStorage.getItem('assistant.help.lang') || 'en'; } catch(e){ return 'en'; } })();
+    btns.forEach(b => b.addEventListener('click', () => apply(b.dataset.setLang)));
+    apply(saved);
+  })();
+
 
   document.body.appendChild(overlay);
   document.body.appendChild(wrap);
