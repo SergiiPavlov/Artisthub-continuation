@@ -759,6 +759,7 @@ async function __tryPickFromLast(text){
 }
 
 window.addEventListener('assistant:pro.suggest.result', (e)=>{
+  try{ if (window.__ASSIST_LONGFORM_MERGE_ACTIVE) return; }catch{}
   const d = (e && e.detail) || {};
   // ---- de-dup signature (skip if same query+ids fired twice rapidly) ----
   const ids = Array.isArray(d.items) ? d.items.map(it => (it && (it.id || it.videoId) || '')).join(',') : '';

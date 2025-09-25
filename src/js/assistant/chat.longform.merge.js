@@ -7,6 +7,7 @@
 */
 
 import { YTProProvider } from "./yt-pro-provider.js";
+try{ window.__ASSIST_LONGFORM_MERGE_ACTIVE = true; }catch{}
 const LOG = (...a) => { try { (console.debug||console.log).call(console, "[chat.longform.merge]", ...a)} catch {} };
 
 const DEFAULT_SELECTORS = {
@@ -66,7 +67,7 @@ function parseIntent(raw) {
   const needSuggest = /(вариант|подбери|предлож|посоветуй|порекомендуй|suggest|под\s+настроени[ея])/i.test(low);
   const qm = text.match(/["“”«»„‟']([^"“”«»„‟']{2,})["“”«»„‟']/); const titleQuoted = qm ? qm[1].trim() : "";
   let actor = ""; const am = text.match(/(?:\bс\s+(?:актером|актрисой)?\s*|\bwith\s+)([a-zа-яёіїє][\w'\-]+(?:\s+[a-zа-яёіїє][\w'\-]+){0,2})/i); if (am) actor = am[1].trim();
-  let mood = ""; let mm = text.match(/под\s+настроени[ея]\s+([a-zа-яёіїє\- ]{3,})/i) || text.match(/настроени[ея]\s+([a-zа-яёіїє\- ]{3,})/i); if (mm) mood = mm[1].trim();
+  let mood = ""; let mm = text.match(/под\s+настроени[ея]\s+([a-zA-Zа-яА-ЯёЁіІїЇєЄ\- ]{3,})/i) || text.match(/настроени[ея]\s+([a-zа-яёіїє\- ]{3,})/i); if (mm) mood = mm[1].trim();
   let title = titleQuoted;
   if (!title) {
     const m2 = text.match(/(?:фильм(?:ы)?|кино|сериал(?:ы)?|movie|series|audiobook|аудио\s*книг(?:а|и|у)|книг(?:а|у)|\bаудио\b|\baudio\b)\s+([^,;.!?]+)$/i);
@@ -96,6 +97,24 @@ function parseClockToSec(s){
   if (p.length === 2) return p[0]*60 + p[1];
   if (p.length === 3) return p[0]*3600 + p[1]*60 + p[2];
   return 0;
+}
+
+function fmtDurationAny(d){
+  if (d === null || d === undefined) return '';
+  if (typeof d === 'number' && isFinite(d)) {
+    const sec = Math.max(0, Math.floor(d));
+    const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60);
+    return h ? (h + 'ч ' + String(m).padStart(2,'0') + 'м') : (m + ' мин');
+  }
+  const s = String(d);
+  if (s.startsWith('PT')) return fmtDurISO(s);
+  if (/^\d{1,2}:\d{2}(?::\d{2})?$/.test(s)) {
+    const p = s.split(':').map(x=>parseInt(x,10)||0);
+    const h = (p.length === 3) ? p[0] : 0;
+    const m = (p.length === 3) ? p[1] : p[0];
+    return h ? (h + 'ч ' + String(m).padStart(2,'0') + 'м') : (m + ' мин');
+  }
+  return '';
 }
 function minSeconds(type){ return type === 'audiobook' ? 1800 : 3600; } // 30m / 60m
 
@@ -229,12 +248,13 @@ async function renderList({ items, type='movie', q='', kind='suggest', limit=12 
     const it = items[idx];
     const card = document.createElement('div'); card.className = 'as-card';
     try { card.setAttribute('data-id', String(it.id)); } catch{}
-    const dur = fmtDurISO(it.duration);
+    const dur = fmtDurationAny(it.duration);
     let titleText = String(it.title||'').trim(); if (!titleText) titleText = 'Без названия';
     const ch = String(it.channel||'').trim();
 
     card.innerHTML = `
       <div class="as-card__idx">#${idx+1}</div>
+      <img class="as-card__img" src="https://i.ytimg.com/vi/${esc(it.id)}/hqdefault.jpg" alt="${esc(titleText)}" loading="lazy"/>
       <div class="as-card__title">${esc(titleText)}</div>
       <div class="as-card__meta">
         ${ch ? `<span class="as-card__author">${esc(ch)}</span>` : ''}
@@ -288,8 +308,18 @@ window.addEventListener('assistant:pro.suggest.result', async (e) => {
     };
     try { if (WD && WD.suggestTimer) { clearTimeout(WD.suggestTimer); WD.suggestTimer = null; } } catch {}
     const qBuilt = d.q || provider.buildQuery({ type: detail.type, title: detail.title, mood: detail.mood, actor: detail.actor });
-    const items = Array.isArray(d.items) ? d.items : [];
+    WD.seenIds = WD.seenIds || new Set();
+    let items = Array.isArray(d.items) ? d.items : [];
+    items = (items||[]).filter(it => it && it.id && !WD.seenIds.has(it.id));
+    if (!items.length) {
+      try {
+        const qb = d.q || provider.buildQuery({ type: detail.type, title: detail.title, mood: detail.mood, actor: detail.actor });
+        const more = await provider.searchManyLong(qb, detail.limit + 8, detail.type);
+        items = (more||[]).map(normItem).filter(Boolean).filter(it => it && it.id && !WD.seenIds.has(it.id));
+      } catch {}
+    }
     await renderList({ items, type: detail.type, q: qBuilt, kind: 'suggest', limit: detail.limit });
+    try { (items||[]).forEach(it => { if (it && it.id) WD.seenIds.add(it.id); }); } catch {}
   } catch(err) { console.warn('[chat.longform.merge] render err', err); }
 });
 
