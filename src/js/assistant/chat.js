@@ -696,8 +696,10 @@ function __addSuggestList(items, opts={type:'movie'}){
       meta.style.opacity='0.8'; meta.style.fontSize='12px'; meta.style.marginBottom='8px';
       const metaText = [];
       if (x.durationSec) metaText.push(__fmtDur(x.durationSec));
-      if (x.author) metaText.push(x.author);
+      const author = x.author || x.channel || x.channelTitle;
+      if (author) metaText.push(author);
       meta.textContent = metaText.join(' · ');
+
       const row = document.createElement('div');
       row.style.display='flex'; row.style.gap='8px';
       const btnPlay = document.createElement('button');
@@ -754,14 +756,7 @@ async function __tryPickFromLast(text){
   }catch{return false;}
 }
 
-window.addEventListener('assistant:pro.suggest.result', (e)=>{
-  try {
-    const d = e?.detail || {}; const items = d.items || [];
-    if (!items.length) { if (typeof addMsg==='function') addMsg('bot', 'Не нашёл длинных видео под запрос. Попробуем другой запрос?'); return; }
-    if (typeof addMsg==='function') addMsg('bot', 'Нашёл варианты:');
-    __addSuggestList(items, { type: d.type || 'movie' });
-  } catch {}
-});
+window.addEventListener('assistant:pro.suggest.result', (e)=>{ /* noop */ });
 
 
   function dispatch(name, detail = {}) {
