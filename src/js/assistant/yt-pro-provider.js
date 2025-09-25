@@ -1,8 +1,8 @@
 /*
  * yt-pro-provider.js
- * Версия: 1.5.0
+ * Версия: 1.5.1
  * Правки:
- *  - asVideo: считаем durationSec (поддержка ISO и clock-like), пробрасываем его.
+ *  - asVideo: считаем durationSec (ISO и clock-like), пробрасываем его.
  *  - searchOneLong/searchManyLong: жёсткая клиентская фильтрация по durationSec.
  *  - serverSearch: overfetch, безопасный /api суффикс.
  */
@@ -37,7 +37,7 @@ function asVideo(obj) {
   const title = obj?.snippet?.title || obj?.title || "(без названия)";
   const thumbnail = obj?.snippet?.thumbnails?.medium?.url || obj?.thumbnail || "";
   const channel = obj?.snippet?.channelTitle || obj?.channel || "";
-  const iso = obj?.contentDetails?.duration || obj?.duration || ""; // может быть ISO или clock-like на некоторых бэках
+  const iso = obj?.contentDetails?.duration || obj?.duration || ""; // может быть ISO или clock-like
   const secs =
     Number(obj?.durationSec || obj?.duration_seconds || obj?.lengthSeconds || obj?.length_seconds || 0) ||
     (typeof iso === 'string' && /PT/.test(iso) ? parseISO8601Duration(iso) : 0) ||
@@ -144,7 +144,7 @@ export class YTProProvider {
     try {
       let arr = await this.serverSearch(q, { type, longOnly: true, limit: 15 });
       if (!arr.length) arr = await this.ytSearch(q, { longOnly: true, limit: 15 });
-      // клиентский фильтр
+      // ВАЖНО: клиентский фильтр длинных
       arr = arr.filter(v => this._isLong(v, type));
       return arr[0] || null;
     } catch {

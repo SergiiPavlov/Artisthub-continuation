@@ -1,4 +1,5 @@
-/* chat.longform.merge.js — v2.6.5
+/* chat.longform.merge.js — v2.6.6
+   - Вернули HARD-GUARD (роут assistant:play/radio/music.play в PRO)
    - Жёсткая клиентская фильтрация коротышей (movie ≥ 60m, audiobook ≥ 30m)
    - long-only обогащение (searchManyLong строго длинные)
    - респектуем detail.limit (6..20)
@@ -198,7 +199,7 @@ async function renderList({ items, type='movie', q='', kind='suggest', limit=12 
   if (items.length < Math.min(6, limit)) {
     try {
       const qBuilt = provider.buildQuery({ type, title: q || '', mood:'', actor:'' });
-      const more = await provider.searchManyLong(qBuilt, limit, type);
+      const more = await provider.searchManyLong(qBuilt, limit, type); // OK, лишние аргументы игнорируются если не поддерживается
       const moreFixed = (more||[]).map(normItem).filter(Boolean);
       items = dedupeById(items.concat(moreFixed)).slice(0, limit);
     } catch (e) { LOG('enrich fail', e); }
@@ -366,6 +367,38 @@ let _lastHandled = { text: "", ts: 0 };
   let tries = 0;
   const iv = setInterval(() => { tries++; wrap(); if (wrapped || tries>=60) clearInterval(iv); }, 200);
   window.addEventListener('focus', wrap, { once: true });
+})();
+
+/* ==== HARD-GUARD: принудительный роут фильмов/аудиокниг в PRO ==== */
+;(function hardGuardProRoute(){
+  function looksMovieOrAudio(q){
+    const s = String(q||'').toLowerCase();
+    const isMovie = /(\bфильм(?:ы)?\b|\bкино\b|\bсериал(?:ы)?\b|\bmovie\b|\bseries\b)/i.test(s);
+    const isAudio = /(\bаудио\s*книг(?:а|и|у)\b|\bкниг(?:а|у)\b|\baudiobook\b|\bаудио\b|\baudio\b)/i.test(s);
+    return { isMovie, isAudio, ok: isMovie || isAudio };
+  }
+  function rerouteToPro(ev){
+    try{
+      const d = (ev && ev.detail) || {};
+      const q = d.title || d.query || d.text || d.transcript || d.prompt || '';
+      const { ok, isAudio } = looksMovieOrAudio(q);
+      if (!ok) return;
+
+      ev.stopImmediatePropagation && ev.stopImmediatePropagation();
+      ev.stopPropagation && ev.stopPropagation();
+      ev.preventDefault && ev.preventDefault();
+
+      const limit = Math.max(6, Math.min(20, Number(d.limit)||12));
+      window.dispatchEvent(new CustomEvent('assistant:pro.play', {
+        detail: { type: isAudio ? 'audiobook' : 'movie', title: q.trim(), limit }
+      }));
+    }catch{}
+  }
+  try {
+    window.addEventListener('assistant:play',       rerouteToPro, true);
+    window.addEventListener('assistant:radio',      rerouteToPro, true);
+    window.addEventListener('assistant:music.play', rerouteToPro, true);
+  } catch {}
 })();
 
 /* ==== Привязка к UI ==== */
