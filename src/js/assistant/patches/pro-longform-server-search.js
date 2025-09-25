@@ -1,32 +1,16 @@
 /**
- * PRO Longform client (server-driven) — strict long-only autoplay
- * Listens to assistant:pro.suggest / assistant:pro.play and goes to backend /api/yt/search.
- * Auto-launches only if a "long" video is found (movie ≥ 60m, audiobook ≥ 30m).
- * If no long videos found — shows cards without autoplay + provides a YouTube link.
- *
- * Connect AFTER base assistant scripts.
+ * PRO Longform client (server-driven) — long-first suggestions
+ * Movies: never autoplay, only suggest cards (long >= 60m preferred).
+ * Audiobooks: can autoplay if long >= 30m, otherwise suggest.
  */
-import { YTProProvider } from "../yt-pro-provider.js"; // corrected path (was "./yt-pro-provider.js")
-const LOG = (...a) => { try { (console.debug||console.log).call(console, "[pro-longform]", ...a)} catch {} };
-
 (function proLongformServerSearch(){
-  var w = window;
+  const w = window;
 
-  // API base
-  var API_BASE = (w.API_BASE || (w.env && w.env.API_BASE) || '').replace(/\/+$/,'') || '';
-  if (!API_BASE) { try { console.warn('[longform] No API_BASE detected'); } catch(_){} }
-
-  // -------- helpers --------
-  function buildQuery(title, type){
-    title = String(title || '').trim();
-    var suffix = type === 'audiobook' ? 'аудиокнига' : 'фильм';
-    if (!title) return suffix; // support mood queries like "подбери под настроение"
-    if (new RegExp('\\b'+suffix+'\\b','i').test(title)) return title;
-    return (title + ' ' + suffix).trim();
-  }
-  function minSeconds(type){ return type === 'audiobook' ? 1800 : 3600; } // 30m for audiobooks, 60m for movies
-
-  function ytSearchUrl(q){ return 'https://www.youtube.com/results?search_query='+encodeURIComponent(q); }
+  // ✅ DEV-safe API base: fallback на 8787 при пустом API_BASE в локалке
+  const fromEnv = (w.API_BASE || (w.env && w.env.API_BASE) || '').replace(/\/+$/,'');
+  const isLocal = /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(location.host);
+  const API_BASE = fromEnv || (isLocal ? 'http://localhost:8787' : '');
+  const hasPlay = typeof w.loadAndPlayYouTubeVideo === 'function';
 
   function postJSON(url, body){
     return fetch(url, {
@@ -34,153 +18,75 @@ const LOG = (...a) => { try { (console.debug||console.log).call(console, "[pro-l
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body || {}),
       credentials: 'include'
-    }).then(function(r){ return r.ok ? r.json() : null; })
-      .catch(function(){ return null; });
+    }).then(r => r.ok ? r.json() : null).catch(()=>null);
   }
-
-  function parseISO8601Duration(iso){
-    // PT#H#M#S -> seconds
-    if (!iso || typeof iso !== 'string') return 0;
-    var m = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
-    if (!m) return 0;
-    var h = parseInt(m[1]||0,10), mm = parseInt(m[2]||0,10), s = parseInt(m[3]||0,10);
-    return h*3600 + mm*60 + s;
+  function parseISO8601(iso){
+    if (!iso) return 0; const m = String(iso).match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+    if (!m) return 0; const h=+m[1]||0, mm=+m[2]||0, s=+m[3]||0; return h*3600+mm*60+s;
   }
-  function formatDuration(sec){
+  function fmt(sec){
     sec = Math.max(0, Math.floor(+sec||0));
-    var h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), s = sec%60;
-    return h>0 ? (h+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0'))
-               : (m+':'+String(s).padStart(2,'0'));
+    const h = (sec/3600)|0, m = ((sec%3600)/60)|0, s = (sec%60)|0;
+    return h ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}` : `${m}:${String(s).padStart(2,'0')}`;
+  }
+  function norm(x){
+    x = x||{};
+    const id = x.id || x.videoId || (x.snippet && x.snippet.resourceId && x.snippet.resourceId.videoId) || (x.snippet && x.snippet.videoId) || '';
+    const title = x.title || (x.snippet && x.snippet.title) || '';
+    const channel = x.channel || x.channelTitle || (x.snippet && x.snippet.channelTitle) || '';
+    let durationSec = Number(x.durationSec || x.duration_seconds || 0);
+    if (!durationSec) { const iso = x.duration || (x.contentDetails && x.contentDetails.duration) || ''; durationSec = parseISO8601(iso); }
+    const thumbnail = x.thumbnail || (id ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg` : '');
+    return { id, title, channel, durationSec, duration: fmt(durationSec), thumbnail };
+  }
+  function map(list){ return Array.isArray(list) ? list.map(norm).filter(it=>!!it.id) : []; }
+  function idsOnly(ids){ return Array.isArray(ids) ? ids.map(id => norm({id})) : []; }
+
+  function buildQuery(title, type){
+    title = String(title || '').trim();
+    const suffix = type === 'audiobook' ? 'аудиокнига' : 'фильм';
+    if (!title) return suffix;
+    if (new RegExp('\\b'+suffix+'\\b','i').test(title)) return title;
+    return (title + ' ' + suffix).trim();
+  }
+  function minSec(type){ return type === 'audiobook' ? 1800 : 3600; }
+
+  function suggest(detail){
+    const type = detail && detail.type === 'audiobook' ? 'audiobook' : 'movie';
+    const q = buildQuery((detail && detail.title) || '', type);
+    const limit = (detail && detail.limit) || 12;
+    const min = minSec(type);
+
+    postJSON(API_BASE + '/api/yt/search', { q, max: limit, filters: { durationSecMin: min } })
+      .then(r => {
+        let items = map(r && r.items);
+        if (items.length) return items;
+        return postJSON(API_BASE + '/api/yt/search', { q, max: Math.max(5, limit) })
+          .then(r2 => {
+            let alt = map(r2 && r2.items); if (alt.length) return alt;
+            return idsOnly(r2 && r2.ids);
+          });
+      }).then(items => {
+        w.dispatchEvent(new CustomEvent('assistant:pro.suggest.result', { detail: { type, q, items } }));
+      });
   }
 
-  function normalizeItem(raw){
-    raw = raw || {};
-    var id = raw.id || raw.videoId || (raw.snippet && raw.snippet.resourceId && raw.snippet.resourceId.videoId) || (raw.snippet && raw.snippet.videoId) || '';
-    var title = raw.title || (raw.snippet && raw.snippet.title) || '';
-    var channel = raw.channel || raw.channelTitle || (raw.snippet && raw.snippet.channelTitle) || '';
-    var durSec = Number(raw.durationSec || raw.duration_seconds || 0);
-    if (!durSec) {
-      var iso = raw.duration || (raw.contentDetails && raw.contentDetails.duration) || '';
-      if (iso) durSec = parseISO8601Duration(iso);
-    }
-    return {
-      id: id,
-      title: title,
-      channel: channel,
-      durationSec: durSec,
-      duration: formatDuration(durSec)
-    };
-  }
-  function mapItems(items){
-    if (!Array.isArray(items)) return [];
-    var out = [];
-    for (var i=0; i<items.length; i++){
-      var n = normalizeItem(items[i]);
-      if (n.id) out.push(n);
-    }
-    return out;
-  }
-  function itemsFromIds(ids){
-    if (!Array.isArray(ids)) return [];
-    var out = [];
-    for (var i=0; i<ids.length; i++){
-      var id = String(ids[i]||'').trim();
-      if (id) out.push({ id: id, title: '', channel: '', durationSec: 0, duration: '' });
-    }
-    return out;
-  }
-  function isLong(item, minSec){
-    var sec = Number(item && item.durationSec || 0);
-    return sec >= (Number(minSec)||0);
+  function play(detail){
+    const type = detail && detail.type === 'audiobook' ? 'audiobook' : 'movie';
+    if (type === 'movie') return suggest(detail); // movies never autoplay
+    const q = buildQuery((detail && detail.title) || '', type);
+    const limit = (detail && detail.limit) || 12;
+    const min = minSec(type);
+    postJSON(API_BASE + '/api/yt/search', { q, max: limit, filters: { durationSecMin: min } })
+      .then(r => {
+        let items = map(r && r.items);
+        let longs = items.filter(it => it.durationSec >= min);
+        if (longs.length && hasPlay) return w.loadAndPlayYouTubeVideo(longs[0].id, longs[0]);
+        // fallback to suggest
+        w.dispatchEvent(new CustomEvent('assistant:pro.suggest.result', { detail: { type, q, items: items.length?items:idsOnly(r && r.ids) } }));
+      });
   }
 
-  function dispatchSuggest(type, items, q){
-    try {
-      w.dispatchEvent(new CustomEvent('assistant:pro.suggest.result', {
-        detail: { type: type, items: items||[], q: q||'' }
-      }));
-    } catch(_) {}
-  }
-  function addMsg(html){
-    try { if (typeof w.addMsg === 'function') w.addMsg('bot', html); } catch(_){}
-  }
-
-  // -------- SUGGEST flow --------
-  async function handleSuggest(detail){
-    var type = detail && detail.type === 'audiobook' ? 'audiobook' : 'movie';
-    var q = buildQuery((detail && detail.title) || '', type);
-    var minSec = minSeconds(type);
-    var limit = (detail && detail.limit) || 12;
-
-    // 1) Long videos search
-    var r1 = await postJSON(API_BASE + '/api/yt/search', { q: q, max: limit, filters: { durationSecMin: minSec } });
-    var items1 = mapItems(r1 && r1.items);
-
-    if (items1.length) { dispatchSuggest(type, items1, q); return; }
-
-    // 2) General search — show something (no autoplay)
-    var r2 = await postJSON(API_BASE + '/api/yt/search', { q: q, max: Math.max(5, limit) });
-    var items2 = mapItems(r2 && r2.items);
-    if (!items2.length) items2 = itemsFromIds(r2 && r2.ids);
-
-    if (items2.length) { dispatchSuggest(type, items2, q); }
-    else {
-      addMsg('Полноценные результаты не нашёл. <a href="'+ytSearchUrl(q)+'" target="_blank" rel="noopener">Открыть YouTube</a>?');
-    }
-  }
-
-  // -------- PLAY flow (long-only autoplay) --------
-  async function handlePlay(detail){
-    var type = detail && detail.type === 'audiobook' ? 'audiobook' : 'movie';
-
-    if (type === 'movie') {
-      await handleSuggest(detail);
-      return;
-    }
-    var q = buildQuery((detail && detail.title) || '', type);
-    var minSec = minSeconds(type);
-    var limit = (detail && detail.limit) || 12;
-
-    // 1) Look for long videos and immediately start the first one
-    var r1 = await postJSON(API_BASE + '/api/yt/search', { q: q, max: limit, filters: { durationSecMin: minSec } });
-    var list1 = mapItems(r1 && r1.items);
-    var longs1 = list1.filter(function(it){ return isLong(it, minSec); });
-
-    if (longs1.length) {
-      var best1 = longs1[0];
-      if (best1 && best1.id) {
-        if (typeof w.loadAndPlayYouTubeVideo === 'function') {
-          try { await w.loadAndPlayYouTubeVideo(best1.id, best1); return; } catch(_){}
-        }
-        // If no global loader, show the long videos as cards instead
-        dispatchSuggest(type, longs1, q);
-        return;
-      }
-    }
-
-    // 2) Extended search. If any long videos appear here, we can auto-play the first.
-    var r2 = await postJSON(API_BASE + '/api/yt/search', { q: q, max: Math.max(6, limit) });
-    var list2 = mapItems(r2 && r2.items);
-    var longs2 = list2.filter(function(it){ return isLong(it, minSec); });
-
-    if (longs2.length) {
-      var best2 = longs2[0];
-      if (best2 && best2.id) {
-        if (typeof w.loadAndPlayYouTubeVideo === 'function') {
-          try { await w.loadAndPlayYouTubeVideo(best2.id, best2); return; } catch(_){}
-        }
-        dispatchSuggest(type, longs2, q);
-        return;
-      }
-    }
-
-    // 3) No long videos found — show whatever we got as cards (no autoplay) + YouTube link
-    var any = list1.length ? list1 : (list2.length ? list2 : itemsFromIds(r2 && r2.ids));
-    if (any.length) { dispatchSuggest(type, any, q); }
-    addMsg('Полной версии не нашёл. <a href="'+ytSearchUrl(q)+'" target="_blank" rel="noopener">Открыть YouTube</a>?');
-  }
-
-  // Wire up event listeners
-  try { w.addEventListener('assistant:pro.suggest', function(e){ handleSuggest((e && e.detail) || {}); }, false); } catch(_){}
-  try { w.addEventListener('assistant:pro.play', function(e){ handlePlay((e && e.detail) || {}); }, false); } catch(_){}
+  try { w.addEventListener('assistant:pro.suggest', e => suggest((e && e.detail) || {}), false); }catch(_){}
+  try { w.addEventListener('assistant:pro.play', e => play((e && e.detail) || {}), false); }catch(_){}
 })();
