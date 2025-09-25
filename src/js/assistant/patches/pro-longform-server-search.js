@@ -6,6 +6,10 @@
  *
  * Подключать ПОСЛЕ базовых ассистент-скриптов.
  */
+
+import { YTProProvider } from "../yt-pro-provider.js"; // <-- путь исправлен (был "./yt-pro-provider.js")
+const LOG = (...a) => { try { (console.debug||console.log).call(console, "[pro-longform]", ...a)} catch {} };
+
 (function proLongformServerSearch(){
   var w = window;
 

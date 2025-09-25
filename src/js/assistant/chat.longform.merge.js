@@ -1,6 +1,8 @@
-/* chat.longform.merge.js — v2.6.1
-   - P1 fix: карточки и watchdog теперь делают Player.open/openQueue + Player.play
-   - Перехват processAssistantQuery (голос), watchdog на suggest/play — как в v2.6.0
+/* chat.longform.merge.js — v2.6.5
+   - Жёсткая клиентская фильтрация коротышей (movie ≥ 60m, audiobook ≥ 30m)
+   - long-only обогащение (searchManyLong строго длинные)
+   - респектуем detail.limit (6..20)
+   - гидрация заголовков, дедуп карточек
 */
 
 import { YTProProvider } from "./yt-pro-provider.js";
@@ -73,28 +75,168 @@ function parseIntent(raw) {
   return { type, title, mood, actor, needSuggest };
 }
 
-/* ==== Рендер карточек ==== */
+/* ==== Нормализация карточек + длительность ==== */
 function fmtDurISO(iso) {
   if (!iso || typeof iso !== 'string') return '';
   try { const m = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/); if (!m) return ''; const h = parseInt(m[1]||0,10), mm = parseInt(m[2]||0,10); return h ? `${h}ч ${mm}м` : `${mm||0} мин`; } catch { return ''; }
 }
-function renderList({ items, type='movie', q='' }) {
+function parseISOtoSec(iso){
+  if (!iso || typeof iso !== 'string') return 0;
+  const m = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+  if (!m) return 0;
+  const h = parseInt(m[1]||0,10), mm = parseInt(m[2]||0,10), s = parseInt(m[3]||0,10);
+  return h*3600 + mm*60 + s;
+}
+function parseClockToSec(s){
+  if (!s || typeof s !== 'string') return 0;
+  const t = s.trim();
+  if (!/^\d{1,2}:\d{2}(?::\d{2})?$/.test(t)) return 0;
+  const p = t.split(':').map(x=>parseInt(x,10)||0);
+  if (p.length === 2) return p[0]*60 + p[1];
+  if (p.length === 3) return p[0]*3600 + p[1]*60 + p[2];
+  return 0;
+}
+function minSeconds(type){ return type === 'audiobook' ? 1800 : 3600; } // 30m / 60m
+
+function pickId(it){
+  return it.id || it.videoId || it.vid || it.ytId || (it.snippet && it.snippet.resourceId && it.snippet.resourceId.videoId) || '';
+}
+function pickTitle(it){
+  const cands = [ it.title, it.name, it.videoTitle, it.text, it.originalTitle, it.label, it.snippet && it.snippet.title, it.og && it.og.title ];
+  let t = ''; for (let i=0;i<cands.length;i++){ if (cands[i] && String(cands[i]).trim()){ t = String(cands[i]).trim(); break; } }
+  if (/^undefined$/i.test(t)) t = '';
+  return t;
+}
+function pickChannel(it){
+  const cands = [it.channel, it.channelTitle, it.author, it.owner, it.uploader, it.snippet && it.snippet.channelTitle];
+  for (let i=0;i<cands.length;i++){ if (cands[i] && String(cands[i]).trim()) return String(cands[i]).trim(); }
+  return '';
+}
+function pickDuration(it){
+  return it.duration || (it.contentDetails && it.contentDetails.duration) || '';
+}
+function normItem(it){
+  if (!it) return null;
+  const id = pickId(it); if (!id) return null;
+  const title = pickTitle(it);
+  const channel = pickChannel(it);
+  const duration = pickDuration(it);
+  return { id, title, channel, duration };
+}
+function dedupeById(arr){
+  const seen = new Set(); const out = [];
+  for (let i=0;i<(arr||[]).length;i++){
+    const it = arr[i]; const id = it && it.id;
+    if (!id || seen.has(id)) continue; seen.add(id); out.push(it);
+  }
+  return out;
+}
+function sigFromItems(items){ try { return (items||[]).map(x=>x.id||'').filter(Boolean).join(','); } catch{ return ''; } }
+function sigFromWrap(el){
+  try { const ex = el.querySelectorAll('.as-btn--play[data-id]'); return Array.from(ex).map(n=>n.getAttribute('data-id')||'').filter(Boolean).join(','); } catch { return ''; }
+}
+function countTitled(el){
+  try { const ts = el.querySelectorAll('.as-card__title'); return Array.from(ts).filter(n => { const t = (n.textContent||'').trim(); return !!t && t !== 'Без названия'; }).length; } catch { return 0; }
+}
+async function fetchTitleByOEmbed(id){
+  try{ const url = `https://www.youtube.com/oembed?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${id}`)}&format=json`; const r = await fetch(url, { mode: 'cors' }); if (!r.ok) return ""; const j = await r.json(); return j && j.title ? String(j.title).trim() : ""; }catch{return "";}
+}
+async function ensureTitles(items, timeoutMs){
+  const need = (items||[]).filter(it => it && it.id && !(it.title && String(it.title).trim()));
+  if (!need.length) return items;
+  const timer = new Promise(res => setTimeout(()=>res('timeout'), timeoutMs||900));
+  const worker = (async () => { for (let i=0;i<need.length;i++){ const it = need[i]; try { const t = await fetchTitleByOEmbed(it.id); if (t) it.title = t; } catch {} } return 'ok'; })();
+  try { await Promise.race([timer, worker]); } catch {}
+  return items;
+}
+function hardDedupeCards(){
   const feed = qs(getSelectors().feed); if (!feed) return;
-  const wrap = document.createElement('div'); wrap.className = 'as-cards';
-  if (!items || !items.length) {
+  const blocks = Array.from(feed.querySelectorAll('.as-cards'));
+  if (blocks.length < 2) return;
+  const groups = new Map();
+  for (let i=0;i<blocks.length;i++){
+    const el = blocks[i];
+    const sigAttr = el.dataset && el.dataset.sig || "";
+    const sig = sigAttr || sigFromWrap(el) || ("__idx_"+i);
+    const arr = groups.get(sig) || [];
+    arr.push(el); groups.set(sig, arr);
+  }
+  groups.forEach(arr => {
+    if (arr.length <= 1) return;
+    arr.sort((a,b) => { const da = countTitled(a), db = countTitled(b); return da - db; });
+    for (let i=0;i<arr.length-1;i++){ try { arr[i].remove(); } catch{} }
+  });
+}
+
+/* ==== Рендер карточек ==== */
+async function renderList({ items, type='movie', q='', kind='suggest', limit=12 }) {
+  const feed = qs(getSelectors().feed); if (!feed) return;
+  limit = Math.max(6, Math.min(20, Number(limit)||12));
+
+  // нормализация
+  try { items = (items||[]).map(normItem).filter(Boolean); } catch {}
+  items = dedupeById(items);
+
+  // ЖЁСТКИЙ фильтр коротышей по длительности (если длительность узнаваема)
+  const needSec = minSeconds(type);
+  const longs = items.filter(it => {
+    const iso = String(it.duration||'');
+    let sec = 0;
+    if (/^PT/.test(iso)) sec = parseISOtoSec(iso);
+    else if (/\d+:\d{2}/.test(iso)) sec = parseClockToSec(iso);
+    // если длительность неизвестна — временно пропускаем, ниже будет обогащение long-only
+    return sec === 0 ? true : (sec >= needSec);
+  });
+
+  // если что-то знаем — показываем только длинные/неизвестные
+  items = longs.length ? longs : items;
+
+  // обрезаем до лимита временно (после обогащения ещё раз обрежем)
+  items = items.slice(0, limit);
+
+  // если сервер дал мало или у всех неизвестна длительность — дотягиваем СТРОГО long-only через provider
+  if (items.length < Math.min(6, limit)) {
+    try {
+      const qBuilt = provider.buildQuery({ type, title: q || '', mood:'', actor:'' });
+      const more = await provider.searchManyLong(qBuilt, limit, type);
+      const moreFixed = (more||[]).map(normItem).filter(Boolean);
+      items = dedupeById(items.concat(moreFixed)).slice(0, limit);
+    } catch (e) { LOG('enrich fail', e); }
+  }
+
+  // гидрация заголовков
+  try {
+    const titled = items.filter(it => it.title && String(it.title).trim()).length;
+    if (items.length && titled < Math.ceil(items.length/2)) {
+      items = await ensureTitles(items, 900);
+    }
+  } catch {}
+
+  const sig = sigFromItems(items);
+  const wrap = document.createElement('div');
+  wrap.className = 'as-cards';
+  try { wrap.dataset.kind = kind; wrap.dataset.sig = sig; } catch(_){}
+
+  if (!items.length) {
     const msg = document.createElement('div'); msg.className = 'as-cards__empty';
     if (type === 'audiobook') msg.innerHTML = `Полноценная аудиокнига не найдена. ${q ? `Попробуйте на YouTube: <a href="https://www.youtube.com/results?search_query=${encodeURIComponent(q)}" target="_blank" rel="noopener">открыть YouTube</a>.` : ''}`;
     else { msg.innerHTML = `Полноценный фильм не найден. ${q ? `Попробуйте на YouTube: <a href="https://www.youtube.com/results?search_query=${encodeURIComponent(q)}" target="_blank" rel="noopener">открыть YouTube</a>.` : ''} Могу показать короткие ролики. Показать?`; setPendingShort({ type: 'movie', title: q||'', mood:'', actor:'' }); }
-    wrap.appendChild(msg); feed.appendChild(wrap); feed.scrollTop = feed.scrollHeight; return;
+    wrap.appendChild(msg); feed.appendChild(wrap); feed.scrollTop = feed.scrollHeight; hardDedupeCards(); return;
   }
-  items.forEach((it, idx) => {
+
+  for (let idx=0; idx<items.length; idx++){
+    const it = items[idx];
     const card = document.createElement('div'); card.className = 'as-card';
+    try { card.setAttribute('data-id', String(it.id)); } catch{}
     const dur = fmtDurISO(it.duration);
+    let titleText = String(it.title||'').trim(); if (!titleText) titleText = 'Без названия';
+    const ch = String(it.channel||'').trim();
+
     card.innerHTML = `
       <div class="as-card__idx">#${idx+1}</div>
-      <div class="as-card__title">${esc(it.title || 'Без названия')}</div>
+      <div class="as-card__title">${esc(titleText)}</div>
       <div class="as-card__meta">
-        ${it.channel ? `<span class="as-card__author">${esc(it.channel)}</span>` : ''}
+        ${ch ? `<span class="as-card__author">${esc(ch)}</span>` : ''}
         ${dur ? `<span class="as-card__dur">${dur}</span>` : ''}
       </div>
       <div class="as-card__row">
@@ -102,41 +244,81 @@ function renderList({ items, type='movie', q='' }) {
         <a class="as-btn as-btn--link" href="https://www.youtube.com/watch?v=${esc(it.id)}" target="_blank" rel="noopener">Открыть на YouTube</a>
       </div>`;
     wrap.appendChild(card);
-  });
+  }
+
   wrap.addEventListener('click', async (e) => {
     const btn = e.target.closest('.as-btn--play'); if (!btn) return;
     const id = btn.getAttribute('data-id'); if (!id) return;
     await openAndPlay(id);
     addMsg('note', 'Включаю…'); speak('Включаю');
   });
+
   feed.appendChild(wrap); feed.scrollTop = feed.scrollHeight;
+
+  // поздняя гидрация «Без названия»
+  (async () => {
+    try {
+      const need = items.filter(it => it && it.id && !(it.title && String(it.title).trim()));
+      if (!need.length) { hardDedupeCards(); return; }
+      for (const it of need) {
+        const t = await fetchTitleByOEmbed(it.id);
+        if (!t) continue;
+        const safeId = (window.CSS && CSS.escape) ? CSS.escape(it.id) : it.id.replace(/"/g,'\\"');
+        const node = wrap.querySelector(`.as-card[data-id="${safeId}"] .as-card__title`);
+        if (node && (node.textContent||'').trim() === 'Без названия') node.textContent = t;
+      }
+      hardDedupeCards();
+    } catch {}
+  })();
+
+  hardDedupeCards();
 }
 
 /* ==== слушаем результат longform ==== */
-window.addEventListener('assistant:pro.suggest.result', (e) => {
-  try { const d = e?.detail || {}; LOG("result from longform:", d); renderList(d); } catch(err) { console.warn('[chat.longform.merge] render err', err); }
+window.addEventListener('assistant:pro.suggest.result', async (e) => {
+  try {
+    const d = e?.detail || {};
+    const detail = {
+      type: d.type || 'movie',
+      title: d.title || '',
+      mood: d.mood || '',
+      actor: d.actor || '',
+      limit: Math.max(6, Math.min(20, Number(d.limit)||12))
+    };
+    try { if (WD && WD.suggestTimer) { clearTimeout(WD.suggestTimer); WD.suggestTimer = null; } } catch {}
+    const qBuilt = d.q || provider.buildQuery({ type: detail.type, title: detail.title, mood: detail.mood, actor: detail.actor });
+    const items = Array.isArray(d.items) ? d.items : [];
+    await renderList({ items, type: detail.type, q: qBuilt, kind: 'suggest', limit: detail.limit });
+  } catch(err) { console.warn('[chat.longform.merge] render err', err); }
 });
 
 /* ==== Watchdog ==== */
 const WD = { suggestTimer: null, playTimer: null };
 function planSuggestWatchdog(detail) {
   if (WD.suggestTimer) clearTimeout(WD.suggestTimer);
-  const { type='movie', title='', mood='', actor='', limit=12 } = (detail||{});
+  const type  = (detail && detail.type)  || 'movie';
+  const title = (detail && detail.title) || '';
+  const mood  = (detail && detail.mood)  || '';
+  const actor = (detail && detail.actor) || '';
+  const limit = Math.max(6, Math.min(20, Number(detail && detail.limit) || 12));
   const q = provider.buildQuery({ type, title, mood, actor });
   WD.suggestTimer = setTimeout(async () => {
     LOG("watchdog: no suggest.result in time — doing provider search", { type, title });
-    const many = await provider.searchManyLong(q, limit);
-    if (many && many.length) { renderList({ items: many, type, q }); }
+    const many = await provider.searchManyLong(q, limit, type); // строго длинные
+    if (many && many.length) { await renderList({ items: many, type, q, kind:'wd-suggest', limit }); }
     else {
       const yurl = provider.buildYouTubeSearchURL(q, type);
-      renderList({ items: [], type, q });
+      await renderList({ items: [], type, q, kind:'wd-suggest', limit });
       addMsg('bot', `Длинных видео не найдено. Откройте поиск на YouTube: <a href="${yurl}" target="_blank" rel="noopener">сюда</a>.`);
     }
   }, 6000);
 }
 function planPlayWatchdog(detail) {
   if (WD.playTimer) clearTimeout(WD.playTimer);
-  const { type='movie', title='', mood='', actor='' } = (detail||{});
+  const type  = (detail && detail.type)  || 'movie';
+  const title = (detail && detail.title) || '';
+  const mood  = (detail && detail.mood)  || '';
+  const actor = (detail && detail.actor) || '';
   const q = provider.buildQuery({ type, title, mood, actor });
   WD.playTimer = setTimeout(async () => {
     LOG("watchdog: play not started — searching best long and playing", { type, title });
@@ -151,7 +333,7 @@ function planPlayWatchdog(detail) {
   }, 5000);
 }
 
-/* ==== Перехват processAssistantQuery (голос) — как в v2.6.0 ==== */
+/* ==== Перехват processAssistantQuery (голос) ==== */
 let _lastHandled = { text: "", ts: 0 };
 (function interceptPAQ(){
   let wrapped = false;
@@ -213,55 +395,37 @@ function tryBindOnce() {
 function bootstrapBinding(){ tryBindOnce(); if (bound) return; const obs = new MutationObserver(() => { if (!bound) tryBindOnce(); if (bound) obs.disconnect(); }); obs.observe(document.documentElement || document.body, { childList: true, subtree: true }); window.addEventListener('DOMContentLoaded', tryBindOnce, { once: true }); window.addEventListener('load', tryBindOnce, { once: true }); }
 bootstrapBinding(); LOG("ready");
 
-// ==== HARD-GUARD: принудительный роут фильмов/аудиокниг в PRO и глушение "музыка-only" ====
-;(function hardGuardProRoute(){
-  // эвристика — текст похож на запрос фильма/сериала или аудиокниги
-  function looksMovieOrAudio(q){
-    const s = String(q||'').toLowerCase();
-    const isMovie = /(\bфильм(?:ы)?\b|\bкино\b|\bсериал(?:ы)?\b|\bmovie\b|\bseries\b)/i.test(s);
-    const isAudio = /(\bаудио\s*книг(?:а|и|у)\b|\bкниг(?:а|у)\b|\baudiobook\b|\bаудио\b|\baudio\b)/i.test(s);
-    return { isMovie, isAudio, ok: isMovie || isAudio };
-  }
 
-  // маршрутизатор: глушим старые события и шлём PRO-плей
-  function rerouteToPro(ev){
-    try{
-      const d = (ev && ev.detail) || {};
-      const q = d.title || d.query || d.text || d.transcript || d.prompt || '';
-      const { ok, isAudio } = looksMovieOrAudio(q);
-      if (!ok) return; // это не фильм/аудиокнига — пропускаем
-
-      // Глушим дальнейших слушателей (именно в захвате!)
-      ev.stopImmediatePropagation && ev.stopImmediatePropagation();
-      ev.stopPropagation && ev.stopPropagation();
-      ev.preventDefault && ev.preventDefault();
-
-      // Пробрасываем в PRO
-      window.dispatchEvent(new CustomEvent('assistant:pro.play', {
-        detail: { type: isAudio ? 'audiobook' : 'movie', title: q.trim(), limit: 12 }
-      }));
-    }catch{}
-  }
-
-  // Ставим ПЕРВЫМИ (capture: true), чтобы отрубать мгновенный «радио/шортс»-путь
+// ---- auto-stop watchdog when player starts ----
+;(function(){
   try {
-    window.addEventListener('assistant:play',  rerouteToPro, true);
-    window.addEventListener('assistant:radio', rerouteToPro, true);
-    window.addEventListener('assistant:music.play', rerouteToPro, true);
-  } catch {}
-
-  // Мягкий фильтр для надоедливого текста "Доступны только музыкальные треки."
-  (function filterMusicOnlyMessage(){
-    try{
-      const orig = window.addMsg;
-      window.addMsg = function(kind, html){
+    if (typeof window !== 'undefined' && window.addEventListener) {
+      window.addEventListener('AM.player.state', function(e){
         try {
-          const text = String(html||'');
-          if (/только музыкальные треки/i.test(text)) return; // не показываем
-        } catch {}
-        return orig ? orig.apply(this, arguments) : undefined;
-      };
-    } catch {}
-  })();
+          var st = e && e.detail && e.detail.state;
+          if (st === 1) { // PLAYING
+            if (typeof WD !== 'undefined' && WD.playTimer) {
+              try { clearTimeout(WD.playTimer); } catch (err) {}
+              WD.playTimer = null;
+            }
+          }
+        } catch (err) {}
+      });
+    }
+  } catch (err) {}
 })();
 
+/* ==== Фильтр текстовой простыни и «музыка-only» ==== */
+;(function filterEnumerations(){
+  try{
+    const orig = window.addMsg;
+    window.addMsg = function(kind, html){
+      try {
+        const text = String(html||'');
+        if (kind === 'bot' && /Наш[ёе]л варианты:/i.test(text) && /▶\s*Играть/i.test(text)) return;
+        if (/только музыкальн(?:ые|ых)\s+(?:трек|запрос)/i.test(text)) return;
+      } catch {}
+      return orig ? orig.apply(this, arguments) : undefined;
+    };
+  } catch {}
+})();
