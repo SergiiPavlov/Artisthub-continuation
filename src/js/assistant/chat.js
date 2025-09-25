@@ -1,4 +1,6 @@
 import { API_BASE } from './apiBase.js';
+const API = API_BASE || (/^(localhost|127\.0\.0\.1)(:\d+)?$/.test(location.host) ? 'http://localhost:8787' : '');
+
 import { warmupBackend } from '../api/warmup.js';
 /* === safe logger for chat.js === */
 /* eslint-disable no-var */
@@ -758,101 +760,124 @@ async function __tryPickFromLast(text){
 
 window.addEventListener('assistant:pro.suggest.result', (e)=>{
   const d = (e && e.detail) || {};
-  // ... (within assistant chat rendering code)
+  // ---- de-dup signature (skip if same query+ids fired twice rapidly) ----
+  const ids = Array.isArray(d.items) ? d.items.map(it => (it && (it.id || it.videoId) || '')).join(',') : '';
+  const sig = (d.q || d.title || '') + '|' + ids;
+  if (window.__ASSIST_CARDS_LAST_SIG === sig) return;
+  window.__ASSIST_CARDS_LAST_SIG = sig;
 
-    const items = Array.isArray(d.items) ? d.items.slice(0) : [];
-    const wrap = document.createElement('div');
-    wrap.className = 'assistant__cards';
-    wrap.style.margin = '8px 0 10px';
-    wrap.style.display = 'grid';
-    wrap.style.gap = '8px';
-    wrap.style.gridTemplateColumns = 'repeat(auto-fill,minmax(240px,1fr))';
+  // Local fallbacks
+  function fmtDur(sec){
+    sec = Math.max(0, Math.floor(Number(sec) || 0));
+    var h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), s = sec%60;
+    return h>0 ? (h+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0')) : (m+':'+String(s).padStart(2,'0'));
+  }
+  const __fmt = (typeof window.__fmtDur === 'function') ? window.__fmtDur : fmtDur;
+  const logEl = window.logEl || document.querySelector('.assistant__log, .chat__log, #log') || document.body;
 
-    (items || []).forEach((x, idx) => {
-      const card = document.createElement('div');
-      card.className = 'assistant__card';
-      card.style.padding = '10px';
-      card.style.border = '1px solid #333';
-      card.style.borderRadius = '10px';
-      card.style.background = '#111';
+  // Cleanup same-sig previous renders (if any)
+  try {
+    document.querySelectorAll('.assistant__cards[data-sig="'+sig+'"]').forEach(n => n.remove());
+  } catch {}
 
-      // **Poster Image element**
-      const img = document.createElement('img');
-      img.src = x.thumbnail || (x.id ? 'https://i.ytimg.com/vi/' + x.id + '/hqdefault.jpg' : '');
-      img.alt = x.title || '';
-      img.style.width = '100%';
-      img.style.borderRadius = '6px';
-      img.style.marginBottom = '6px';
-      card.appendChild(img);
+  // Data preparation
+  const items = Array.isArray(d.items) ? d.items.slice(0) : [];
+  const wrap = document.createElement('div');
+  wrap.className = 'assistant__cards';
+  wrap.dataset.sig = sig;
+  wrap.style.margin = '8px 0 10px';
+  wrap.style.display = 'grid';
+  wrap.style.gap = '8px';
+  wrap.style.gridTemplateColumns = 'repeat(auto-fill,minmax(240px,1fr))';
 
-      // Title
-      const t = document.createElement('div');
-      t.style.fontWeight = '600';
-      t.style.marginBottom = '6px';
-      t.textContent = `${idx+1}. ${x.title || 'Без названия'}`;
+  (items || []).forEach((x, idx) => {
+    const card = document.createElement('div');
+    card.className = 'assistant__card';
+    card.style.padding = '10px';
+    card.style.border = '1px solid #333';
+    card.style.borderRadius = '10px';
+    card.style.background = '#111';
 
-      // Meta (duration and author/channel)
-      const meta = document.createElement('div');
-      meta.style.opacity = '0.8';
-      meta.style.fontSize = '12px';
-      meta.style.marginBottom = '8px';
-      const metaText = [];
-      if (x.durationSec) metaText.push(__fmtDur(x.durationSec));
-      const author = x.author || x.channel || x.channelTitle;
-      if (author) metaText.push(author);
-      meta.textContent = metaText.join(' · ');
+    // Thumbnail
+    const id = x.id || x.videoId || (x.snippet && (x.snippet.resourceId && x.snippet.resourceId.videoId)) || '';
+    const title = x.title || (x.snippet && x.snippet.title) || '';
+    const ytThumb = id ? ('https://i.ytimg.com/vi/' + id + '/hqdefault.jpg') : '';
+    const thumb = x.thumbnail || (x.snippet && x.snippet.thumbnails && ((x.snippet.thumbnails.maxres && x.snippet.thumbnails.maxres.url) || (x.snippet.thumbnails.high && x.snippet.thumbnails.high.url) || (x.snippet.thumbnails.medium && x.snippet.thumbnails.medium.url))) || ytThumb;
 
-      // Action buttons
-      const row = document.createElement('div');
-      row.style.display = 'flex';
-      row.style.gap = '8px';
+    const img = document.createElement('img');
+    img.src = thumb || '';
+    img.alt = title || '';
+    img.style.width = '100%';
+    img.style.borderRadius = '6px';
+    img.style.marginBottom = '6px';
+    card.appendChild(img);
 
-      const btnPlay = document.createElement('button');
-      btnPlay.textContent = '▶ Играть';
-      btnPlay.className = 'assistant__btn';
-      btnPlay.style.padding = '6px 10px';
-      btnPlay.style.borderRadius = '8px';
-      btnPlay.style.border = '1px solid #444';
-      btnPlay.style.background = '#1d1d1d';
-      btnPlay.style.cursor = 'pointer';
-      btnPlay.addEventListener('click', () => {
-        try {
-          window.dispatchEvent(new CustomEvent('assistant:play', { detail: { id: x.id } }));
-          if (typeof addMsg === 'function') addMsg('note', `Включаю: ${x.title || x.id}`);
-          if (typeof speak === 'function') speak('Включаю');
-        } catch {}
-      });
-      row.appendChild(btnPlay);
+    // Title
+    const t = document.createElement('div');
+    t.style.fontWeight = '600';
+    t.style.marginBottom = '6px';
+    t.textContent = `${idx+1}. ${title || 'Без названия'}`;
 
-      // "Watch on YouTube" link (if embedding is not allowed)
-      if (x.embedOk === false && x.url) {
-        const a = document.createElement('a');
-        a.textContent = '📺 Открыть на YouTube';
-        a.href = x.url;
-        a.target = '_blank';
-        a.style.display = 'inline-block';
-        a.style.padding = '6px 10px';
-        a.style.borderRadius = '8px';
-        a.style.border = '1px solid #444';
-        a.style.background = '#1d1d1d';
-        a.style.color = '#fff';
-        a.style.textDecoration = 'none';
-        a.style.cursor = 'pointer';
-        row.appendChild(a);
-      }
+    // Meta (duration + author/channel)
+    const meta = document.createElement('div');
+    meta.style.opacity = '0.8';
+    meta.style.fontSize = '12px';
+    meta.style.marginBottom = '8px';
+    const metaText = [];
+    const durSec = x.durationSec || (x.contentDetails && x.contentDetails.durationSec) || 0;
+    if (durSec) metaText.push((typeof __fmt === 'function' ? __fmt : fmtDur)(durSec));
+    const author = x.author || x.channel || x.channelTitle || (x.snippet && x.snippet.channelTitle);
+    if (author) metaText.push(author);
+    meta.textContent = metaText.join(' · ');
 
-      // Append elements to card and wrap
-      card.appendChild(t);
-      card.appendChild(meta);
-      card.appendChild(row);
-      wrap.appendChild(card);
+    // Actions
+    const row = document.createElement('div');
+    row.style.display = 'flex';
+    row.style.flexWrap = 'wrap';
+    row.style.gap = '8px';
+
+    const btnPlay = document.createElement('button');
+    btnPlay.textContent = '▶ Играть';
+    btnPlay.className = 'assistant__btn';
+    btnPlay.style.padding = '6px 10px';
+    btnPlay.style.borderRadius = '8px';
+    btnPlay.style.border = '1px solid #444';
+    btnPlay.style.background = '#1d1d1d';
+    btnPlay.style.cursor = 'pointer';
+    btnPlay.addEventListener('click', () => {
+      try {
+        window.dispatchEvent(new CustomEvent('assistant:play', { detail: { id } }));
+        if (typeof addMsg === 'function') addMsg('note', `Включаю: ${title || id}`);
+        if (typeof speak === 'function') speak('Включаю');
+      } catch {}
     });
+    row.appendChild(btnPlay);
 
-    // Append the cards container to the chat log
-    if (logEl && logEl.appendChild) {
-      logEl.appendChild(wrap);
-      logEl.scrollTop = logEl.scrollHeight;
-    }
+    // Always offer YouTube link (even if embeddable)
+    const yta = document.createElement('a');
+    yta.textContent = '📺 Открыть на YouTube';
+    yta.href = id ? ('https://www.youtube.com/watch?v=' + id) : (x.url || '#');
+    yta.target = '_blank';
+    yta.style.display = 'inline-block';
+    yta.style.padding = '6px 10px';
+    yta.style.borderRadius = '8px';
+    yta.style.border = '1px solid #444';
+    yta.style.background = '#1d1d1d';
+    yta.style.color = '#fff';
+    yta.style.textDecoration = 'none';
+    yta.style.cursor = 'pointer';
+    row.appendChild(yta);
+
+    card.appendChild(t);
+    card.appendChild(meta);
+    card.appendChild(row);
+    wrap.appendChild(card);
+  });
+
+  if (logEl && logEl.appendChild) {
+    logEl.appendChild(wrap);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
 });
 
 
@@ -1305,11 +1330,12 @@ window.addEventListener('assistant:pro.suggest.result', (e)=>{
 
   // ─── API (с автоповтором) ────────────────────────────────────────────
   async function fetchWithRetry(url, options = {}, tries = 2) {
-    let lastErr;
+    const timeoutMs = Number(options && options.timeoutMs ? options.timeoutMs : 45000);
+let lastErr;
     for (let i = 0; i < tries; i++) {
       try {
         const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 20000);
+        const t = setTimeout(() => ctrl.abort('timeout'), timeoutMs);
         const r = await fetch(url, { ...options, signal: ctrl.signal });
         clearTimeout(t);
         // 502/503 часто бывают на «пробуждении»
@@ -1325,7 +1351,8 @@ window.addEventListener('assistant:pro.suggest.result', (e)=>{
 
   async function callAI(message) {
     if (!API_BASE) return null;
-    const r = await fetchWithRetry(`${API_BASE}/api/chat`, {
+    const r = await fetchWithRetry(`${API}/api/chat`, {
+      timeoutMs: 45000,
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1343,7 +1370,10 @@ window.addEventListener('assistant:pro.suggest.result', (e)=>{
     let v = String(text || "").trim();
     if (!v) return;
 
-    // внешний препроцессор (без редактирования chat.js)
+    
+    // Skip AI call if longform bridge already handled this input
+    if (window.__ASSIST_SKIP_AI_ONCE__) { window.__ASSIST_SKIP_AI_ONCE__ = false; return; }
+// внешний препроцессор (без редактирования chat.js)
     try {
       if (window.Assistant?.preprocessText) {
         const res = window.Assistant.preprocessText(v);
