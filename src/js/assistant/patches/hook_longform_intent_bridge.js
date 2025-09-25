@@ -32,7 +32,7 @@
       }
     }
     const type = isAudiobook ? 'audiobook' : 'movie';
-    const needSuggest = !title;
+    const needSuggest = !title || !isAudiobook;
     return { type, title, needSuggest };
   }
 
@@ -76,64 +76,35 @@
     return false;
   }
 
-  // --- dispatcher ---
-  function dispatchLongformIntent(intent){
-    const detail = { type:intent.type, title:intent.title, mood:intent.mood, actor:intent.actor, limit: 12 };
-    if (intent.needSuggest) {
-      w.dispatchEvent(new CustomEvent('assistant:pro.suggest', { detail }));
-      safe(w.addMsg, 'note','Подбираю варианты…'); safe(w.speak,'Подбираю варианты'); safe(w.planSuggestWatchdog, detail);
-    } else {
-      w.dispatchEvent(new CustomEvent('assistant:pro.play', { detail }));
-      safe(w.addMsg,'note', intent.type==='audiobook' ? 'Ищу и включаю аудиокнигу…' : 'Ищу и включаю фильм…');
-      safe(w.speak, intent.type==='audiobook' ? 'Ищу аудиокнигу' : 'Ищу фильм');
-      safe(w.planPlayWatchdog, detail);
+  // --- patch in ---
+  try {
+    // Hook into assistant query processing:
+    const origParseIntent = w.parseIntent;
+    if (typeof origParseIntent === 'function') {
+      w.parseIntent = function bridgedParseIntent(raw, ...rest){
+        const intent = detectLongform(raw);
+        if (intent) {
+          log('Longform intent detected:', intent);
+          safe(w.addMsg, 'user', raw);  // echo the user's request in chat
+          if (intent.needSuggest) {
+            // Movie or unspecified longform request – provide suggestions (cards)
+            window.dispatchEvent(new CustomEvent('assistant:pro.suggest', { detail: intent }));
+            safe(w.addMsg, 'note', 'Подбираю варианты…'); 
+            safe(w.speak, 'Подбираю варианты');
+            safe(w.planSuggestWatchdog, intent);
+          } else {
+            // Audiobook with a specific title – proceed to play it if possible
+            window.dispatchEvent(new CustomEvent('assistant:pro.play', { detail: intent }));
+            safe(w.addMsg, 'note', intent.type==='audiobook' ? 'Ищу и включаю аудиокнигу…' : 'Ищу и включаю фильм…');
+            safe(w.speak, intent.type==='audiobook' ? 'Включаю аудиокнигу' : 'Включаю фильм');
+          }
+          return; // do not continue to normal intent processing
+        }
+        // No longform intent detected, proceed normally
+        return origParseIntent.call(this, raw, ...rest);
+      };
     }
+  } catch(err) {
+    console.error('[bridge] Failed to patch parseIntent:', err);
   }
-
-  // --- wrap parseIntent ---
-  const _parseIntent = w.parseIntent;
-  if (typeof _parseIntent === 'function') {
-    w.parseIntent = function(v){
-      let r = null;
-      try { r = _parseIntent.apply(this, arguments); } catch {}
-      if (r && (r.type==='audiobook' || r.type==='movie')) return r;
-      const det = detectLongform(v);
-      if (det) { log('parseIntent bridged', det); return det; }
-      return r;
-    };
-    log('wrapped parseIntent');
-  }
-
-  // --- wrap processAssistantQuery ---
-  const _proc = w.processAssistantQuery;
-  if (typeof _proc === 'function') {
-    w.processAssistantQuery = function(v){
-      // echo user text so "аудиокнига ..." always visible
-      safe(w.addMsg, 'user', (safe(w.esc, v) || v));
-      // handle yes/no for pending short
-      if (maybeHandleYesNo(v)) return true;
-      // detect longform
-      const det = detectLongform(v);
-      if (det) { log('PAQ bridged', det); dispatchLongformIntent(det); return true; }
-      // else continue normal flow
-      try { return _proc.apply(this, arguments); } catch(e){ log('PAQ error', e); }
-    };
-    log('wrapped processAssistantQuery');
-  }
-
-  // --- wrap handleSubmitText if exists ---
-  const _hst = w.handleSubmitText;
-  if (typeof _hst === 'function') {
-    w.handleSubmitText = function(v){
-      // echo user text
-      safe(w.addMsg, 'user', (safe(w.esc, v) || v));
-      if (maybeHandleYesNo(v)) return true;
-      const det = detectLongform(v);
-      if (det) { log('handleSubmit bridged', det); dispatchLongformIntent(det); return true; }
-      try { return _hst.apply(this, arguments); } catch(e){ log('handleSubmit err', e); return false; }
-    };
-    log('wrapped handleSubmitText');
-  }
-
-  log('longform intent bridge active');
 })();
