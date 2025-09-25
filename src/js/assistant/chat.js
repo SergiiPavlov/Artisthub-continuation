@@ -756,7 +756,104 @@ async function __tryPickFromLast(text){
   }catch{return false;}
 }
 
-window.addEventListener('assistant:pro.suggest.result', (e)=>{ /* noop */ });
+window.addEventListener('assistant:pro.suggest.result', (e)=>{
+  const d = (e && e.detail) || {};
+  // ... (within assistant chat rendering code)
+
+    const items = Array.isArray(d.items) ? d.items.slice(0) : [];
+    const wrap = document.createElement('div');
+    wrap.className = 'assistant__cards';
+    wrap.style.margin = '8px 0 10px';
+    wrap.style.display = 'grid';
+    wrap.style.gap = '8px';
+    wrap.style.gridTemplateColumns = 'repeat(auto-fill,minmax(240px,1fr))';
+
+    (items || []).forEach((x, idx) => {
+      const card = document.createElement('div');
+      card.className = 'assistant__card';
+      card.style.padding = '10px';
+      card.style.border = '1px solid #333';
+      card.style.borderRadius = '10px';
+      card.style.background = '#111';
+
+      // **Poster Image element**
+      const img = document.createElement('img');
+      img.src = x.thumbnail || (x.id ? 'https://i.ytimg.com/vi/' + x.id + '/hqdefault.jpg' : '');
+      img.alt = x.title || '';
+      img.style.width = '100%';
+      img.style.borderRadius = '6px';
+      img.style.marginBottom = '6px';
+      card.appendChild(img);
+
+      // Title
+      const t = document.createElement('div');
+      t.style.fontWeight = '600';
+      t.style.marginBottom = '6px';
+      t.textContent = `${idx+1}. ${x.title || 'Без названия'}`;
+
+      // Meta (duration and author/channel)
+      const meta = document.createElement('div');
+      meta.style.opacity = '0.8';
+      meta.style.fontSize = '12px';
+      meta.style.marginBottom = '8px';
+      const metaText = [];
+      if (x.durationSec) metaText.push(__fmtDur(x.durationSec));
+      const author = x.author || x.channel || x.channelTitle;
+      if (author) metaText.push(author);
+      meta.textContent = metaText.join(' · ');
+
+      // Action buttons
+      const row = document.createElement('div');
+      row.style.display = 'flex';
+      row.style.gap = '8px';
+
+      const btnPlay = document.createElement('button');
+      btnPlay.textContent = '▶ Играть';
+      btnPlay.className = 'assistant__btn';
+      btnPlay.style.padding = '6px 10px';
+      btnPlay.style.borderRadius = '8px';
+      btnPlay.style.border = '1px solid #444';
+      btnPlay.style.background = '#1d1d1d';
+      btnPlay.style.cursor = 'pointer';
+      btnPlay.addEventListener('click', () => {
+        try {
+          window.dispatchEvent(new CustomEvent('assistant:play', { detail: { id: x.id } }));
+          if (typeof addMsg === 'function') addMsg('note', `Включаю: ${x.title || x.id}`);
+          if (typeof speak === 'function') speak('Включаю');
+        } catch {}
+      });
+      row.appendChild(btnPlay);
+
+      // "Watch on YouTube" link (if embedding is not allowed)
+      if (x.embedOk === false && x.url) {
+        const a = document.createElement('a');
+        a.textContent = '📺 Открыть на YouTube';
+        a.href = x.url;
+        a.target = '_blank';
+        a.style.display = 'inline-block';
+        a.style.padding = '6px 10px';
+        a.style.borderRadius = '8px';
+        a.style.border = '1px solid #444';
+        a.style.background = '#1d1d1d';
+        a.style.color = '#fff';
+        a.style.textDecoration = 'none';
+        a.style.cursor = 'pointer';
+        row.appendChild(a);
+      }
+
+      // Append elements to card and wrap
+      card.appendChild(t);
+      card.appendChild(meta);
+      card.appendChild(row);
+      wrap.appendChild(card);
+    });
+
+    // Append the cards container to the chat log
+    if (logEl && logEl.appendChild) {
+      logEl.appendChild(wrap);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+});
 
 
   function dispatch(name, detail = {}) {

@@ -1,13 +1,12 @@
 /**
  * PRO Longform client (server-driven) — strict long-only autoplay
- * Слушает assistant:pro.suggest / assistant:pro.play и ходит на бекенд /api/yt/search.
- * Автозапуск — только если найден "длинный" ролик (movie ≥ 60m, audiobook ≥ 30m).
- * Если длинных нет — карточки без автозапуска + ссылка на YouTube.
+ * Listens to assistant:pro.suggest / assistant:pro.play and goes to backend /api/yt/search.
+ * Auto-launches only if a "long" video is found (movie ≥ 60m, audiobook ≥ 30m).
+ * If no long videos found — shows cards without autoplay + provides a YouTube link.
  *
- * Подключать ПОСЛЕ базовых ассистент-скриптов.
+ * Connect AFTER base assistant scripts.
  */
-
-import { YTProProvider } from "../yt-pro-provider.js"; // <-- путь исправлен (был "./yt-pro-provider.js")
+import { YTProProvider } from "../yt-pro-provider.js"; // corrected path (was "./yt-pro-provider.js")
 const LOG = (...a) => { try { (console.debug||console.log).call(console, "[pro-longform]", ...a)} catch {} };
 
 (function proLongformServerSearch(){
@@ -21,11 +20,11 @@ const LOG = (...a) => { try { (console.debug||console.log).call(console, "[pro-l
   function buildQuery(title, type){
     title = String(title || '').trim();
     var suffix = type === 'audiobook' ? 'аудиокнига' : 'фильм';
-    if (!title) return suffix; // поддержка mood-запросов вида "подбери под настроение"
+    if (!title) return suffix; // support mood queries like "подбери под настроение"
     if (new RegExp('\\b'+suffix+'\\b','i').test(title)) return title;
     return (title + ' ' + suffix).trim();
   }
-  function minSeconds(type){ return type === 'audiobook' ? 1800 : 3600; } // 30m/60m
+  function minSeconds(type){ return type === 'audiobook' ? 1800 : 3600; } // 30m for audiobooks, 60m for movies
 
   function ytSearchUrl(q){ return 'https://www.youtube.com/results?search_query='+encodeURIComponent(q); }
 
@@ -56,7 +55,7 @@ const LOG = (...a) => { try { (console.debug||console.log).call(console, "[pro-l
 
   function normalizeItem(raw){
     raw = raw || {};
-    var id = raw.id || (raw.videoId) || (raw.snippet && raw.snippet.resourceId && raw.snippet.resourceId.videoId) || (raw.snippet && raw.snippet.videoId) || '';
+    var id = raw.id || raw.videoId || (raw.snippet && raw.snippet.resourceId && raw.snippet.resourceId.videoId) || (raw.snippet && raw.snippet.videoId) || '';
     var title = raw.title || (raw.snippet && raw.snippet.title) || '';
     var channel = raw.channel || raw.channelTitle || (raw.snippet && raw.snippet.channelTitle) || '';
     var durSec = Number(raw.durationSec || raw.duration_seconds || 0);
@@ -75,7 +74,7 @@ const LOG = (...a) => { try { (console.debug||console.log).call(console, "[pro-l
   function mapItems(items){
     if (!Array.isArray(items)) return [];
     var out = [];
-    for (var i=0;i<items.length;i++){
+    for (var i=0; i<items.length; i++){
       var n = normalizeItem(items[i]);
       if (n.id) out.push(n);
     }
@@ -84,7 +83,7 @@ const LOG = (...a) => { try { (console.debug||console.log).call(console, "[pro-l
   function itemsFromIds(ids){
     if (!Array.isArray(ids)) return [];
     var out = [];
-    for (var i=0;i<ids.length;i++){
+    for (var i=0; i<ids.length; i++){
       var id = String(ids[i]||'').trim();
       if (id) out.push({ id: id, title: '', channel: '', durationSec: 0, duration: '' });
     }
@@ -113,13 +112,13 @@ const LOG = (...a) => { try { (console.debug||console.log).call(console, "[pro-l
     var minSec = minSeconds(type);
     var limit = (detail && detail.limit) || 12;
 
-    // 1) длинные
+    // 1) Long videos search
     var r1 = await postJSON(API_BASE + '/api/yt/search', { q: q, max: limit, filters: { durationSecMin: minSec } });
     var items1 = mapItems(r1 && r1.items);
 
     if (items1.length) { dispatchSuggest(type, items1, q); return; }
 
-    // 2) общий поиск — показать хоть что-то (без автозапуска)
+    // 2) General search — show something (no autoplay)
     var r2 = await postJSON(API_BASE + '/api/yt/search', { q: q, max: Math.max(5, limit) });
     var items2 = mapItems(r2 && r2.items);
     if (!items2.length) items2 = itemsFromIds(r2 && r2.ids);
@@ -130,14 +129,19 @@ const LOG = (...a) => { try { (console.debug||console.log).call(console, "[pro-l
     }
   }
 
-  // -------- PLAY flow (строго long-only для автозапуска) --------
+  // -------- PLAY flow (long-only autoplay) --------
   async function handlePlay(detail){
     var type = detail && detail.type === 'audiobook' ? 'audiobook' : 'movie';
+
+    if (type === 'movie') {
+      await handleSuggest(detail);
+      return;
+    }
     var q = buildQuery((detail && detail.title) || '', type);
     var minSec = minSeconds(type);
     var limit = (detail && detail.limit) || 12;
 
-    // 1) ищем длинные и сразу стартуем первый длинный
+    // 1) Look for long videos and immediately start the first one
     var r1 = await postJSON(API_BASE + '/api/yt/search', { q: q, max: limit, filters: { durationSecMin: minSec } });
     var list1 = mapItems(r1 && r1.items);
     var longs1 = list1.filter(function(it){ return isLong(it, minSec); });
@@ -148,13 +152,13 @@ const LOG = (...a) => { try { (console.debug||console.log).call(console, "[pro-l
         if (typeof w.loadAndPlayYouTubeVideo === 'function') {
           try { await w.loadAndPlayYouTubeVideo(best1.id, best1); return; } catch(_){}
         }
-        // если глобального лоадера нет — покажем карточки длинных
+        // If no global loader, show the long videos as cards instead
         dispatchSuggest(type, longs1, q);
         return;
       }
     }
 
-    // 2) расширенный поиск. Если появятся длинные — можно автозапустить (long-only)
+    // 2) Extended search. If any long videos appear here, we can auto-play the first.
     var r2 = await postJSON(API_BASE + '/api/yt/search', { q: q, max: Math.max(6, limit) });
     var list2 = mapItems(r2 && r2.items);
     var longs2 = list2.filter(function(it){ return isLong(it, minSec); });
@@ -170,15 +174,13 @@ const LOG = (...a) => { try { (console.debug||console.log).call(console, "[pro-l
       }
     }
 
-    // 3) длинных нет — карточки без автозапуска (что нашлось) + ссылка на YouTube
+    // 3) No long videos found — show whatever we got as cards (no autoplay) + YouTube link
     var any = list1.length ? list1 : (list2.length ? list2 : itemsFromIds(r2 && r2.ids));
     if (any.length) { dispatchSuggest(type, any, q); }
     addMsg('Полной версии не нашёл. <a href="'+ytSearchUrl(q)+'" target="_blank" rel="noopener">Открыть YouTube</a>?');
   }
 
-  // wire
+  // Wire up event listeners
   try { w.addEventListener('assistant:pro.suggest', function(e){ handleSuggest((e && e.detail) || {}); }, false); } catch(_){}
-  try { w.addEventListener('assistant:pro.play',    function(e){ handlePlay((e && e.detail) || {}); }, false); } catch(_){}
-
-  try { console.log('[longform] server-driven longform (strict long-only autoplay) active'); } catch(_){}
+  try { w.addEventListener('assistant:pro.play', function(e){ handlePlay((e && e.detail) || {}); }, false); } catch(_){}
 })();
