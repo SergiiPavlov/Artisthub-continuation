@@ -100,21 +100,31 @@ function parseClockToSec(s){
 }
 
 function fmtDurationAny(d){
-  if (d === null || d === undefined) return '';
+  const hide = () => '';
+  if (d === null || d === undefined) return hide();
   if (typeof d === 'number' && isFinite(d)) {
     const sec = Math.max(0, Math.floor(d));
+    if (sec < 60) return hide();
     const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60);
     return h ? (h + 'ч ' + String(m).padStart(2,'0') + 'м') : (m + ' мин');
   }
-  const s = String(d);
-  if (s.startsWith('PT')) return fmtDurISO(s);
+  const s = String(d).trim();
+  if (!s) return hide();
+  if (s.startsWith('PT')) {
+    const m = s.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+    const sec = m ? (parseInt(m[1]||0,10)*3600 + parseInt(m[2]||0,10)*60 + parseInt(m[3]||0,10)) : 0;
+    if (sec < 60) return hide();
+    const hh = Math.floor(sec/3600), mm = Math.floor((sec%3600)/60);
+    return hh ? (hh + 'ч ' + String(mm).padStart(2,'0') + 'м') : (mm + ' мин');
+  }
   if (/^\d{1,2}:\d{2}(?::\d{2})?$/.test(s)) {
     const p = s.split(':').map(x=>parseInt(x,10)||0);
-    const h = (p.length === 3) ? p[0] : 0;
-    const m = (p.length === 3) ? p[1] : p[0];
+    const sec = (p.length===3) ? (p[0]*3600 + p[1]*60 + p[2]) : (p[0]*60 + p[1]);
+    if (sec < 60) return hide();
+    const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60);
     return h ? (h + 'ч ' + String(m).padStart(2,'0') + 'м') : (m + ' мин');
   }
-  return '';
+  return hide();
 }
 function minSeconds(type){ return type === 'audiobook' ? 1800 : 3600; } // 30m / 60m
 
@@ -224,6 +234,16 @@ async function renderList({ items, type='movie', q='', kind='suggest', limit=12 
     } catch (e) { LOG('enrich fail', e); }
   }
 
+  // Fallback to ANY-length if still too few
+  try {
+    if (!items.length || items.length < Math.min(4, limit)) {
+      const anyQ = provider.buildQuery({ type, title: q || '', mood:'', actor:'' });
+      const any = await provider.searchManyAny(anyQ, limit, type);
+      const anyFixed = (any||[]).map(normItem).filter(Boolean);
+      items = dedupeById(items.concat(anyFixed)).slice(0, limit);
+    }
+  } catch (e) { LOG('any-fallback fail', e); }
+
   // гидрация заголовков
   try {
     const titled = items.filter(it => it.title && String(it.title).trim()).length;
@@ -239,9 +259,15 @@ async function renderList({ items, type='movie', q='', kind='suggest', limit=12 
 
   if (!items.length) {
     const msg = document.createElement('div'); msg.className = 'as-cards__empty';
-    if (type === 'audiobook') msg.innerHTML = `Полноценная аудиокнига не найдена. ${q ? `Попробуйте на YouTube: <a href="https://www.youtube.com/results?search_query=${encodeURIComponent(q)}" target="_blank" rel="noopener">открыть YouTube</a>.` : ''}`;
-    else { msg.innerHTML = `Полноценный фильм не найден. ${q ? `Попробуйте на YouTube: <a href="https://www.youtube.com/results?search_query=${encodeURIComponent(q)}" target="_blank" rel="noopener">открыть YouTube</a>.` : ''} Могу показать короткие ролики. Показать?`; setPendingShort({ type: 'movie', title: q||'', mood:'', actor:'' }); }
-    wrap.appendChild(msg); feed.appendChild(wrap); feed.scrollTop = feed.scrollHeight; hardDedupeCards(); return;
+    const yurl = provider.buildYouTubeSearchURL(q, type);
+    msg.innerHTML = type === 'audiobook'
+      ? `Полноценная аудиокнига не найдена. ${q ? `Попробуйте на YouTube: <a href="${yurl}" target="_blank" rel="noopener">открыть YouTube</a>.` : ''}`
+      : `Полноценный фильм не найден. ${q ? `Попробуйте на YouTube: <a href="${yurl}" target="_blank" rel="noopener">открыть YouTube</a>.` : ''}`;
+    wrap.appendChild(msg);
+    feed.appendChild(wrap);
+    feed.scrollTop = feed.scrollHeight;
+    hardDedupeCards();
+    return;
   }
 
   for (let idx=0; idx<items.length; idx++){
@@ -249,12 +275,12 @@ async function renderList({ items, type='movie', q='', kind='suggest', limit=12 
     const card = document.createElement('div'); card.className = 'as-card';
     try { card.setAttribute('data-id', String(it.id)); } catch{}
     const dur = fmtDurationAny(it.duration);
-    let titleText = String(it.title||'').trim(); if (!titleText) titleText = 'Без названия';
+    let titleText = String(it.title||'').replace(/\bundefined\b/gi,'').replace(/\s+/g,' ').trim(); if (!titleText) titleText = 'Без названия';
     const ch = String(it.channel||'').trim();
 
     card.innerHTML = `
       <div class="as-card__idx">#${idx+1}</div>
-      <img class="as-card__img" src="https://i.ytimg.com/vi/${esc(it.id)}/hqdefault.jpg" alt="${esc(titleText)}" loading="lazy"/>
+      <div class="as-card__imgwrap"><img class="as-card__img" src="https://i.ytimg.com/vi/${esc(it.id)}/hqdefault.jpg" alt="${esc(titleText)}" loading="lazy"/>${dur ? `<span class="as-card__badge">${esc(dur)}</span>` : ""}</div>
       <div class="as-card__title">${esc(titleText)}</div>
       <div class="as-card__meta">
         ${ch ? `<span class="as-card__author">${esc(ch)}</span>` : ''}
@@ -319,7 +345,7 @@ window.addEventListener('assistant:pro.suggest.result', async (e) => {
       } catch {}
     }
     await renderList({ items, type: detail.type, q: qBuilt, kind: 'suggest', limit: detail.limit });
-    try { (items||[]).forEach(it => { if (it && it.id) WD.seenIds.add(it.id); }); } catch {}
+    try { (items||[]).forEach(it => { if (it && it.id) { WD.seenIds.add(it.id); try{ window.__ASSIST_SEEN_IDS = window.__ASSIST_SEEN_IDS || new Set(); window.__ASSIST_SEEN_IDS.add(it.id); }catch{} } }); } catch {}
   } catch(err) { console.warn('[chat.longform.merge] render err', err); }
 });
 

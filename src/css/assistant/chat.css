@@ -480,3 +480,21 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+/* Poster wrapper with duration badge */
+.as-card__imgwrap {
+  position: relative;
+}
+.as-card__badge {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  background: rgba(0, 0, 0, 0.7);
+  color: var(--as-text, #e8eef5);
+  font-size: 12px;
+  line-height: 1;
+  padding: 4px 6px;
+  border-radius: 6px;
+  pointer-events: none;
+  user-select: none;
+}
