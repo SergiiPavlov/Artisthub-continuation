@@ -519,3 +519,18 @@ bootstrapBinding(); LOG("ready");
     };
   } catch {}
 })();
+
+/* ==== Фильтр текстовой простыни и «музыка-only» ==== */
+;(function filterEnumerations(){
+  try{
+    const orig = window.addMsg;
+    window.addMsg = function(kind, html){
+      try {
+        const text = String(html||'');
+        if (kind === 'bot' && /Наш[ёе]л варианты:/i.test(text) && /▶\s*Играть/i.test(text)) return;
+        if (/только музыкальн(?:ые|ых)\s+(?:трек|запрос)/i.test(text)) return;
+      } catch {}
+      return orig ? orig.apply(this, arguments) : undefined;
+    };
+  } catch {}
+})();
