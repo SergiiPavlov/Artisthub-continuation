@@ -8,6 +8,7 @@
 
 import { YTProProvider } from "./yt-pro-provider.js";
 try{ window.__ASSIST_LONGFORM_MERGE_ACTIVE = true; }catch{}
+try{ window.__AS_CARDS_ACTIVE = true; }catch{}
 const LOG = (...a) => { try { (console.debug||console.log).call(console, "[chat.longform.merge]", ...a)} catch {} };
 
 const DEFAULT_SELECTORS = {
@@ -407,12 +408,12 @@ let _lastHandled = { text: "", ts: 0 };
         const now = Date.now();
         if (text === _lastHandled.text && (now - _lastHandled.ts) < 2000) { LOG("PAQ intercept: duplicate, skipping", text); return { handledByPro: true }; }
         _lastHandled = { text, ts: now };
-        const detail = { type:intent.type, title:intent.title, mood:intent.mood, actor:intent.actor, limit: 12 };
+        const detail = { type:intent.type, title:intent.title, mood:intent.mood, actor:intent.actor, limit: 9 };
         LOG("PAQ intercept: dispatching", detail);
-        if (intent.needSuggest || !intent.title) {
+        if (intent.needSuggest || !intent.title || intent.type==='movie') {
           window.dispatchEvent(new CustomEvent('assistant:pro.suggest', { detail })); addMsg('note','Подбираю варианты…'); speak('Подбираю варианты'); planSuggestWatchdog(detail);
         } else {
-          window.dispatchEvent(new CustomEvent('assistant:pro.play', { detail })); addMsg('note', intent.type==='audiobook' ? 'Ищу и включаю аудиокнигу…' : 'Ищу и включаю фильм…'); speak(intent.type==='audiobook' ? 'Ищу аудиокнигу' : 'Ищу фильм'); planPlayWatchdog(detail);
+          window.dispatchEvent(new CustomEvent('assistant:pro.suggest', { detail })); addMsg('note', intent.type==='audiobook' ? 'Ищу и включаю аудиокнигу…' : 'Ищу и включаю фильм…'); speak(intent.type==='audiobook' ? 'Ищу аудиокнигу' : 'Ищу фильм'); planPlayWatchdog(detail);
         }
         return { handledByPro: true };
       }
@@ -445,7 +446,7 @@ let _lastHandled = { text: "", ts: 0 };
       ev.preventDefault && ev.preventDefault();
 
       const limit = Math.max(6, Math.min(20, Number(d.limit)||12));
-      window.dispatchEvent(new CustomEvent('assistant:pro.play', {
+      window.dispatchEvent(new CustomEvent('assistant:pro.suggest', {
         detail: { type: isAudio ? 'audiobook' : 'movie', title: q.trim(), limit }
       }));
     }catch{}
@@ -462,9 +463,9 @@ let bound = false;
 async function handleSubmitText(v) {
   const intent = parseIntent(v); if (!intent) return false;
   addMsg('user', esc(v));
-  const detail = { type:intent.type, title:intent.title, mood:intent.mood, actor:intent.actor, limit: 12 };
-  if (intent.needSuggest || !intent.title) { window.dispatchEvent(new CustomEvent('assistant:pro.suggest', { detail })); addMsg('note','Подбираю варианты…'); speak('Подбираю варианты'); planSuggestWatchdog(detail); }
-  else { window.dispatchEvent(new CustomEvent('assistant:pro.play', { detail })); addMsg('note', intent.type==='audiobook' ? 'Ищу и включаю аудиокнигу…' : 'Ищу и включаю фильм…'); speak(intent.type==='audiobook' ? 'Ищу аудиокнигу' : 'Ищу фильм'); planPlayWatchdog(detail); }
+  const detail = { type:intent.type, title:intent.title, mood:intent.mood, actor:intent.actor, limit: 9 };
+  if (intent.needSuggest || !intent.title || intent.type==='movie') { window.dispatchEvent(new CustomEvent('assistant:pro.suggest', { detail })); addMsg('note','Подбираю варианты…'); speak('Подбираю варианты'); planSuggestWatchdog(detail); }
+  else { window.dispatchEvent(new CustomEvent('assistant:pro.suggest', { detail })); addMsg('note', intent.type==='audiobook' ? 'Ищу и включаю аудиокнигу…' : 'Ищу и включаю фильм…'); speak(intent.type==='audiobook' ? 'Ищу аудиокнигу' : 'Ищу фильм'); planPlayWatchdog(detail); }
   return true;
 }
 function tryBindOnce() {
@@ -502,6 +503,21 @@ bootstrapBinding(); LOG("ready");
       });
     }
   } catch (err) {}
+})();
+
+/* ==== Фильтр текстовой простыни и «музыка-only» ==== */
+;(function filterEnumerations(){
+  try{
+    const orig = window.addMsg;
+    window.addMsg = function(kind, html){
+      try {
+        const text = String(html||'');
+        if (kind === 'bot' && /Наш[ёе]л варианты:/i.test(text) && /▶\s*Играть/i.test(text)) return;
+        if (/только музыкальн(?:ые|ых)\s+(?:трек|запрос)/i.test(text)) return;
+      } catch {}
+      return orig ? orig.apply(this, arguments) : undefined;
+    };
+  } catch {}
 })();
 
 /* ==== Фильтр текстовой простыни и «музыка-only» ==== */
