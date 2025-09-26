@@ -9,7 +9,7 @@ import { API_BASE } from './apiBase.js';
 const LONG_MIN_SEC = 3600;         // фильм >= 60 мин
 const AUDIOBOOK_MIN_SEC = 1800;    // аудиокнига >= 30 мин
 const PROBE_LIMIT = 90;
-const SUGGEST_LIMIT_DEFAULT = 12;
+const SUGGEST_LIMIT_DEFAULT = (typeof window !== 'undefined' && window.__PRO_CARDS_MAX) ? Number(window.__PRO_CARDS_MAX) : 6;
 const YT_WAIT_TIMEOUT_MS = 8000;
 
 const NEG = '-мульт -cartoon -animation -trailer -трейлер -короткометраж -shorts -short -тизер -обзор -review -сцена -scene -recap';

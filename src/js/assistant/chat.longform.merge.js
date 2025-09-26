@@ -2,11 +2,15 @@
    - Вернули HARD-GUARD (роут assistant:play/radio/music.play в PRO)
    - Жёсткая клиентская фильтрация коротышей (movie ≥ 60m, audiobook ≥ 30m)
    - long-only обогащение (searchManyLong строго длинные)
-   - респектуем detail.limit (6..20)
+   - респектуем detail.limit (1..CARDS_MAX)
    - гидрация заголовков, дедуп карточек
 */
 
 import { YTProProvider } from "./yt-pro-provider.js";
+try{ window.__ASSIST_LONGFORM_MERGE_ACTIVE = true; }catch{}
+try{ window.__AS_CARDS_ACTIVE = true; }catch{}
+try{ if (typeof window!=='undefined' && (window.__PRO_CARDS_MAX==null)) window.__PRO_CARDS_MAX = 6; }catch{}
+const CARDS_MAX = (typeof window !== 'undefined' && window.__PRO_CARDS_MAX) ? Number(window.__PRO_CARDS_MAX) : 6;
 const LOG = (...a) => { try { (console.debug||console.log).call(console, "[chat.longform.merge]", ...a)} catch {} };
 
 const DEFAULT_SELECTORS = {
@@ -66,7 +70,7 @@ function parseIntent(raw) {
   const needSuggest = /(вариант|подбери|предлож|посоветуй|порекомендуй|suggest|под\s+настроени[ея])/i.test(low);
   const qm = text.match(/["“”«»„‟']([^"“”«»„‟']{2,})["“”«»„‟']/); const titleQuoted = qm ? qm[1].trim() : "";
   let actor = ""; const am = text.match(/(?:\bс\s+(?:актером|актрисой)?\s*|\bwith\s+)([a-zа-яёіїє][\w'\-]+(?:\s+[a-zа-яёіїє][\w'\-]+){0,2})/i); if (am) actor = am[1].trim();
-  let mood = ""; let mm = text.match(/под\s+настроени[ея]\s+([a-zа-яёіїє\- ]{3,})/i) || text.match(/настроени[ея]\s+([a-zа-яёіїє\- ]{3,})/i); if (mm) mood = mm[1].trim();
+  let mood = ""; let mm = text.match(/под\s+настроени[ея]\s+([a-zA-Zа-яА-ЯёЁіІїЇєЄ\- ]{3,})/i) || text.match(/настроени[ея]\s+([a-zа-яёіїє\- ]{3,})/i); if (mm) mood = mm[1].trim();
   let title = titleQuoted;
   if (!title) {
     const m2 = text.match(/(?:фильм(?:ы)?|кино|сериал(?:ы)?|movie|series|audiobook|аудио\s*книг(?:а|и|у)|книг(?:а|у)|\bаудио\b|\baudio\b)\s+([^,;.!?]+)$/i);
@@ -96,6 +100,34 @@ function parseClockToSec(s){
   if (p.length === 2) return p[0]*60 + p[1];
   if (p.length === 3) return p[0]*3600 + p[1]*60 + p[2];
   return 0;
+}
+
+function fmtDurationAny(d){
+  const hide = () => '';
+  if (d === null || d === undefined) return hide();
+  if (typeof d === 'number' && isFinite(d)) {
+    const sec = Math.max(0, Math.floor(d));
+    if (sec < 60) return hide();
+    const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60);
+    return h ? (h + 'ч ' + String(m).padStart(2,'0') + 'м') : (m + ' мин');
+  }
+  const s = String(d).trim();
+  if (!s) return hide();
+  if (s.startsWith('PT')) {
+    const m = s.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+    const sec = m ? (parseInt(m[1]||0,10)*3600 + parseInt(m[2]||0,10)*60 + parseInt(m[3]||0,10)) : 0;
+    if (sec < 60) return hide();
+    const hh = Math.floor(sec/3600), mm = Math.floor((sec%3600)/60);
+    return hh ? (hh + 'ч ' + String(mm).padStart(2,'0') + 'м') : (mm + ' мин');
+  }
+  if (/^\d{1,2}:\d{2}(?::\d{2})?$/.test(s)) {
+    const p = s.split(':').map(x=>parseInt(x,10)||0);
+    const sec = (p.length===3) ? (p[0]*3600 + p[1]*60 + p[2]) : (p[0]*60 + p[1]);
+    if (sec < 60) return hide();
+    const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60);
+    return h ? (h + 'ч ' + String(m).padStart(2,'0') + 'м') : (m + ' мин');
+  }
+  return hide();
 }
 function minSeconds(type){ return type === 'audiobook' ? 1800 : 3600; } // 30m / 60m
 
@@ -170,9 +202,9 @@ function hardDedupeCards(){
 }
 
 /* ==== Рендер карточек ==== */
-async function renderList({ items, type='movie', q='', kind='suggest', limit=12 }) {
+async function renderList({ items, type='movie', q='', kind='suggest', limit=CARDS_MAX}) {
   const feed = qs(getSelectors().feed); if (!feed) return;
-  limit = Math.max(6, Math.min(20, Number(limit)||12));
+  limit = Math.max(1, Math.min(CARDS_MAX, Number(limit)||CARDS_MAX));
 
   // нормализация
   try { items = (items||[]).map(normItem).filter(Boolean); } catch {}
@@ -196,7 +228,7 @@ async function renderList({ items, type='movie', q='', kind='suggest', limit=12 
   items = items.slice(0, limit);
 
   // если сервер дал мало или у всех неизвестна длительность — дотягиваем СТРОГО long-only через provider
-  if (items.length < Math.min(6, limit)) {
+  if (items.length < Math.min(CARDS_MAX, limit)) {
     try {
       const qBuilt = provider.buildQuery({ type, title: q || '', mood:'', actor:'' });
       const more = await provider.searchManyLong(qBuilt, limit, type); // OK, лишние аргументы игнорируются если не поддерживается
@@ -204,6 +236,16 @@ async function renderList({ items, type='movie', q='', kind='suggest', limit=12 
       items = dedupeById(items.concat(moreFixed)).slice(0, limit);
     } catch (e) { LOG('enrich fail', e); }
   }
+
+  // Fallback to ANY-length if still too few
+  try {
+    if (!items.length || items.length < Math.min(4, limit)) {
+      const anyQ = provider.buildQuery({ type, title: q || '', mood:'', actor:'' });
+      const any = await provider.searchManyAny(anyQ, limit, type);
+      const anyFixed = (any||[]).map(normItem).filter(Boolean);
+      items = dedupeById(items.concat(anyFixed)).slice(0, limit);
+    }
+  } catch (e) { LOG('any-fallback fail', e); }
 
   // гидрация заголовков
   try {
@@ -220,21 +262,28 @@ async function renderList({ items, type='movie', q='', kind='suggest', limit=12 
 
   if (!items.length) {
     const msg = document.createElement('div'); msg.className = 'as-cards__empty';
-    if (type === 'audiobook') msg.innerHTML = `Полноценная аудиокнига не найдена. ${q ? `Попробуйте на YouTube: <a href="https://www.youtube.com/results?search_query=${encodeURIComponent(q)}" target="_blank" rel="noopener">открыть YouTube</a>.` : ''}`;
-    else { msg.innerHTML = `Полноценный фильм не найден. ${q ? `Попробуйте на YouTube: <a href="https://www.youtube.com/results?search_query=${encodeURIComponent(q)}" target="_blank" rel="noopener">открыть YouTube</a>.` : ''} Могу показать короткие ролики. Показать?`; setPendingShort({ type: 'movie', title: q||'', mood:'', actor:'' }); }
-    wrap.appendChild(msg); feed.appendChild(wrap); feed.scrollTop = feed.scrollHeight; hardDedupeCards(); return;
+    const yurl = provider.buildYouTubeSearchURL(q, type);
+    msg.innerHTML = type === 'audiobook'
+      ? `Полноценная аудиокнига не найдена. ${q ? `Попробуйте на YouTube: <a href="${yurl}" target="_blank" rel="noopener">открыть YouTube</a>.` : ''}`
+      : `Полноценный фильм не найден. ${q ? `Попробуйте на YouTube: <a href="${yurl}" target="_blank" rel="noopener">открыть YouTube</a>.` : ''}`;
+    wrap.appendChild(msg);
+    feed.appendChild(wrap);
+    feed.scrollTop = feed.scrollHeight;
+    hardDedupeCards();
+    return;
   }
 
   for (let idx=0; idx<items.length; idx++){
     const it = items[idx];
     const card = document.createElement('div'); card.className = 'as-card';
     try { card.setAttribute('data-id', String(it.id)); } catch{}
-    const dur = fmtDurISO(it.duration);
-    let titleText = String(it.title||'').trim(); if (!titleText) titleText = 'Без названия';
+    const dur = fmtDurationAny(it.duration);
+    let titleText = String(it.title||'').replace(/\bundefined\b/gi,'').replace(/\s+/g,' ').trim(); if (!titleText) titleText = 'Без названия';
     const ch = String(it.channel||'').trim();
 
     card.innerHTML = `
       <div class="as-card__idx">#${idx+1}</div>
+      <div class="as-card__imgwrap"><img class="as-card__img" src="https://i.ytimg.com/vi/${esc(it.id)}/hqdefault.jpg" alt="${esc(titleText)}" loading="lazy"/>${dur ? `<span class="as-card__badge">${esc(dur)}</span>` : ""}</div>
       <div class="as-card__title">${esc(titleText)}</div>
       <div class="as-card__meta">
         ${ch ? `<span class="as-card__author">${esc(ch)}</span>` : ''}
@@ -284,12 +333,22 @@ window.addEventListener('assistant:pro.suggest.result', async (e) => {
       title: d.title || '',
       mood: d.mood || '',
       actor: d.actor || '',
-      limit: Math.max(6, Math.min(20, Number(d.limit)||12))
+      limit: Math.max(1, Math.min(CARDS_MAX, Number(d.limit)||CARDS_MAX))
     };
     try { if (WD && WD.suggestTimer) { clearTimeout(WD.suggestTimer); WD.suggestTimer = null; } } catch {}
     const qBuilt = d.q || provider.buildQuery({ type: detail.type, title: detail.title, mood: detail.mood, actor: detail.actor });
-    const items = Array.isArray(d.items) ? d.items : [];
+    WD.seenIds = WD.seenIds || new Set();
+    let items = Array.isArray(d.items) ? d.items : [];
+    items = (items||[]).filter(it => it && it.id && !WD.seenIds.has(it.id));
+    if (!items.length) {
+      try {
+        const qb = d.q || provider.buildQuery({ type: detail.type, title: detail.title, mood: detail.mood, actor: detail.actor });
+        const more = await provider.searchManyLong(qb, detail.limit + 8, detail.type);
+        items = (more||[]).map(normItem).filter(Boolean).filter(it => it && it.id && !WD.seenIds.has(it.id));
+      } catch {}
+    }
     await renderList({ items, type: detail.type, q: qBuilt, kind: 'suggest', limit: detail.limit });
+    try { (items||[]).forEach(it => { if (it && it.id) { WD.seenIds.add(it.id); try{ window.__ASSIST_SEEN_IDS = window.__ASSIST_SEEN_IDS || new Set(); window.__ASSIST_SEEN_IDS.add(it.id); }catch{} } }); } catch {}
   } catch(err) { console.warn('[chat.longform.merge] render err', err); }
 });
 
@@ -301,7 +360,7 @@ function planSuggestWatchdog(detail) {
   const title = (detail && detail.title) || '';
   const mood  = (detail && detail.mood)  || '';
   const actor = (detail && detail.actor) || '';
-  const limit = Math.max(6, Math.min(20, Number(detail && detail.limit) || 12));
+  const limit = Math.max(1, Math.min(CARDS_MAX, Number(detail && detail.limit) || 12));
   const q = provider.buildQuery({ type, title, mood, actor });
   WD.suggestTimer = setTimeout(async () => {
     LOG("watchdog: no suggest.result in time — doing provider search", { type, title });
@@ -351,12 +410,12 @@ let _lastHandled = { text: "", ts: 0 };
         const now = Date.now();
         if (text === _lastHandled.text && (now - _lastHandled.ts) < 2000) { LOG("PAQ intercept: duplicate, skipping", text); return { handledByPro: true }; }
         _lastHandled = { text, ts: now };
-        const detail = { type:intent.type, title:intent.title, mood:intent.mood, actor:intent.actor, limit: 12 };
+        const detail = { type:intent.type, title:intent.title, mood:intent.mood, actor:intent.actor, limit: CARDS_MAX };
         LOG("PAQ intercept: dispatching", detail);
-        if (intent.needSuggest || !intent.title) {
+        if (intent.needSuggest || !intent.title || intent.type==='movie') {
           window.dispatchEvent(new CustomEvent('assistant:pro.suggest', { detail })); addMsg('note','Подбираю варианты…'); speak('Подбираю варианты'); planSuggestWatchdog(detail);
         } else {
-          window.dispatchEvent(new CustomEvent('assistant:pro.play', { detail })); addMsg('note', intent.type==='audiobook' ? 'Ищу и включаю аудиокнигу…' : 'Ищу и включаю фильм…'); speak(intent.type==='audiobook' ? 'Ищу аудиокнигу' : 'Ищу фильм'); planPlayWatchdog(detail);
+          window.dispatchEvent(new CustomEvent('assistant:pro.suggest', { detail })); addMsg('note', intent.type==='audiobook' ? 'Ищу и включаю аудиокнигу…' : 'Ищу и включаю фильм…'); speak(intent.type==='audiobook' ? 'Ищу аудиокнигу' : 'Ищу фильм'); planPlayWatchdog(detail);
         }
         return { handledByPro: true };
       }
@@ -388,8 +447,8 @@ let _lastHandled = { text: "", ts: 0 };
       ev.stopPropagation && ev.stopPropagation();
       ev.preventDefault && ev.preventDefault();
 
-      const limit = Math.max(6, Math.min(20, Number(d.limit)||12));
-      window.dispatchEvent(new CustomEvent('assistant:pro.play', {
+      const limit = Math.max(1, Math.min(CARDS_MAX, Number(d.limit)||CARDS_MAX));
+      window.dispatchEvent(new CustomEvent('assistant:pro.suggest', {
         detail: { type: isAudio ? 'audiobook' : 'movie', title: q.trim(), limit }
       }));
     }catch{}
@@ -406,9 +465,9 @@ let bound = false;
 async function handleSubmitText(v) {
   const intent = parseIntent(v); if (!intent) return false;
   addMsg('user', esc(v));
-  const detail = { type:intent.type, title:intent.title, mood:intent.mood, actor:intent.actor, limit: 12 };
-  if (intent.needSuggest || !intent.title) { window.dispatchEvent(new CustomEvent('assistant:pro.suggest', { detail })); addMsg('note','Подбираю варианты…'); speak('Подбираю варианты'); planSuggestWatchdog(detail); }
-  else { window.dispatchEvent(new CustomEvent('assistant:pro.play', { detail })); addMsg('note', intent.type==='audiobook' ? 'Ищу и включаю аудиокнигу…' : 'Ищу и включаю фильм…'); speak(intent.type==='audiobook' ? 'Ищу аудиокнигу' : 'Ищу фильм'); planPlayWatchdog(detail); }
+  const detail = { type:intent.type, title:intent.title, mood:intent.mood, actor:intent.actor, limit: CARDS_MAX };
+  if (intent.needSuggest || !intent.title || intent.type==='movie') { window.dispatchEvent(new CustomEvent('assistant:pro.suggest', { detail })); addMsg('note','Подбираю варианты…'); speak('Подбираю варианты'); planSuggestWatchdog(detail); }
+  else { window.dispatchEvent(new CustomEvent('assistant:pro.suggest', { detail })); addMsg('note', intent.type==='audiobook' ? 'Ищу и включаю аудиокнигу…' : 'Ищу и включаю фильм…'); speak(intent.type==='audiobook' ? 'Ищу аудиокнигу' : 'Ищу фильм'); planPlayWatchdog(detail); }
   return true;
 }
 function tryBindOnce() {
@@ -446,6 +505,21 @@ bootstrapBinding(); LOG("ready");
       });
     }
   } catch (err) {}
+})();
+
+/* ==== Фильтр текстовой простыни и «музыка-only» ==== */
+;(function filterEnumerations(){
+  try{
+    const orig = window.addMsg;
+    window.addMsg = function(kind, html){
+      try {
+        const text = String(html||'');
+        if (kind === 'bot' && /Наш[ёе]л варианты:/i.test(text) && /▶\s*Играть/i.test(text)) return;
+        if (/только музыкальн(?:ые|ых)\s+(?:трек|запрос)/i.test(text)) return;
+      } catch {}
+      return orig ? orig.apply(this, arguments) : undefined;
+    };
+  } catch {}
 })();
 
 /* ==== Фильтр текстовой простыни и «музыка-only» ==== */

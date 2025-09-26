@@ -35,7 +35,7 @@
       const intent = parseIntent ? parseIntent(v) : null;
       if (!intent) return false;
       safe(w.addMsg, 'user', safe(w.esc, v) || v);
-      const detail = { type:intent.type, title:intent.title, mood:intent.mood, actor:intent.actor, limit: 12 };
+      const detail = { type:intent.type, title:intent.title, mood:intent.mood, actor:intent.actor, limit: (window.__PRO_CARDS_MAX || 6) };
       if (intent.needSuggest || !intent.title) {
         w.dispatchEvent(new CustomEvent('assistant:pro.suggest', { detail }));
         safe(w.addMsg, 'note','Подбираю варианты…'); safe(w.speak,'Подбираю варианты'); safe(w.planSuggestWatchdog, detail);

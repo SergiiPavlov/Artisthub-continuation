@@ -90,7 +90,7 @@
     if (W.__pendingShort) {
       if (/^(?:да|ага|угу|yes|sure|ok|okay|конечно|давай|хорошо)\b/.test(low)) {
         const ps = W.__pendingShort; W.__pendingShort = null;
-        window.dispatchEvent(new CustomEvent('assistant:pro.suggest', { detail: { type: ps.type||'movie', title: ps.title||'', limit: 12, minSecOverride: 0 } }));
+        window.dispatchEvent(new CustomEvent('assistant:pro.suggest', { detail: { type: ps.type||'movie', title: ps.title||'', limit: (window.__PRO_CARDS_MAX || 6), minSecOverride: 0 } }));
         addMsg('note','Ищу короткие ролики…'); speak('Ищу короткие ролики');
         return { handled: true };
       }
@@ -112,7 +112,7 @@
       if (intent) {
         addMsg('user', esc(String(text)));
         if (intent.needSuggest || !intent.title) {
-          window.dispatchEvent(new CustomEvent('assistant:pro.suggest', { detail: { type:intent.type, title:intent.title, mood:intent.mood, actor:intent.actor, limit: 12 } }));
+          window.dispatchEvent(new CustomEvent('assistant:pro.suggest', { detail: { type:intent.type, title:intent.title, mood:intent.mood, actor:intent.actor, limit: (window.__PRO_CARDS_MAX || 6) } }));
           addMsg('note','Подбираю варианты…'); speak('Подбираю варианты');
         } else {
           window.dispatchEvent(new CustomEvent('assistant:pro.play', { detail: { type:intent.type, title:intent.title, mood:intent.mood, actor:intent.actor } }));
