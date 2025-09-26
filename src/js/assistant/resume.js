@@ -88,6 +88,25 @@
       .am-resume__btn:hover{background:#1c2631}
       .am-resume__x{background:transparent;border:none;color:#9aa0a6;cursor:pointer;margin-left:.25rem}
       @media(max-width:640px){.am-resume{left:12px;right:12px;bottom:84px;max-width:none}}
+       /* --- Mobile folding (<=768px) --- */
+      @media (max-width: 768px){
+        .am-resume{ left: 10px; right: 10px; padding: .8rem .85rem; flex-direction: column; }
+        .am-resume__btns{
+          width: 100%;
+          margin-left: 0;
+          display: grid;
+          grid-template-columns: 1fr auto; /* left col grows, right for × */
+          gap: .5rem;
+          align-items: stretch;
+        }
+        .am-resume__btns [data-act="resume"]{ grid-column: 1 / -1; } /* full width first row */
+        .am-resume__btns [data-act="restart"]{ grid-column: 1; }     /* left on second row */
+        .am-resume__btns [data-act="dismiss"]{ grid-column: 2; justify-self: end; } /* right (×) */
+      }
+      /* Safety for ultra narrow (<=320px) */
+      @media (max-width: 320px){
+        .am-resume{ left: 6px; right: 6px; }
+      }
     `.trim();
     const s = document.createElement("style");
     s.id = "am-resume-style";

@@ -10,10 +10,59 @@
 const LOG = (...a) => { try { (console.debug||console.log).call(console, "[yt-pro-provider]", ...a)} catch {} };
 
 function smartJoin(parts) { return parts.filter(Boolean).join(" ").replace(/\s+/g, " ").trim(); }
+
+function parseYears(text) {
+  try {
+    const t = String(text || '').toLowerCase();
+    const mRange = t.match(/(19|20)\d{2}\s*[-–—]\s*(19|20)\d{2}/);
+    if (mRange) return { from: parseInt(mRange[0].slice(0,4),10), to: parseInt(mRange[0].slice(-4),10) };
+    const mYear = t.match(/\b(19|20)\d{2}\b/);
+    if (mYear) return { from: parseInt(mYear[0],10), to: parseInt(mYear[0],10) };
+  } catch {}
+  return null;
+}
+function detectGenre(text){
+  const s = String(text||'').toLowerCase();
+  const map = [
+    ['комедия','comedy'], ['ужасы','horror'], ['боевик','action'], ['драма','drama'],
+    ['фантастика','sci-fi'], ['фэнтези','fantasy'], ['детектив','detective'],
+    ['мелодрама','melodrama'], ['триллер','thriller'], ['приключения','adventure'],
+    ['военный','war'], ['исторический','historical'], ['биография','biography']
+  ];
+  for (const [ru,en] of map) if (s.includes(ru)) return { ru, en };
+  return null;
+}
+function detectCountryLang(text){
+  const s = String(text||'').toLowerCase();
+  if (/(украинск|укр\b|ua\b)/.test(s)) return { lang: 'ukrainian', tag: 'українською' };
+  if (/(русск|ru\b|российск|росія|росіянин)/.test(s)) return { lang: 'russian', tag: 'на русском' };
+  if (/(советск|sssr|ссср)/.test(s)) return { tag: 'советский' };
+  if (/(english|английск|en\b)/.test(s)) return { lang: 'english', tag: 'in english' };
+  return null;
+}
+function enrichQueryParts(q, type="movie"){
+  const parts = [q];
+  const g = detectGenre(q);
+  const y = parseYears(q);
+  const c = detectCountryLang(q);
+
+  // prefer full-length hints
+  if (type === 'movie') parts.push('full movie', 'фильм полностью', 'без рекламы');
+  if (type === 'audiobook') parts.push('аудиокнига', 'полная версия');
+
+  if (g) parts.push(g.en, g.ru);
+  if (y) parts.push(String(y.from), (y.to && y.to!==y.from) ? String(y.to) : '');
+  if (c?.tag) parts.push(c.tag);
+  if (c?.lang === 'russian') parts.push('русская озвучка');
+  if (c?.lang === 'ukrainian') parts.push('український дубляж');
+
+  return parts.filter(Boolean).join(' ').replace(/\s+/g,' ').trim();
+}
 function decorateQueryByType(q, type) {
-  if (type === "movie") return smartJoin([q, "фильм", "полностью"]);
-  if (type === "audiobook") return smartJoin([q, "аудиокнига", "полная версия"]);
-  return q;
+  const base = enrichQueryParts(q, type);
+  if (type === "movie") return base;
+  if (type === "audiobook") return base;
+  return base;
 }
 
 function parseISO8601Duration(iso){
@@ -75,18 +124,21 @@ export class YTProProvider {
     // POST
     try {
       const url = `${this.apiBase.replace(/\/$/, "")}/yt/search`;
-      const body = {
+      const exclude = Array.isArray(opts?.exclude) ? opts.exclude
+  : (typeof window !== 'undefined' && window.__ASSIST_SEEN_IDS && typeof window.__ASSIST_SEEN_IDS.forEach === 'function'
+     ? Array.from(window.__ASSIST_SEEN_IDS) : []);
+      const body = { 
         q,
         max: fetchMax,
         type,
         videoEmbeddable: true,
         ...(longOnly ? { duration: "long", filters: { durationSecMin: minSec } } : {})
-      };
+      , exclude };
       const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), credentials: "omit" });
       if (res.ok) {
         const data = await res.json();
         const arr = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []);
-        if (arr.length) return arr.map(asVideo);
+        if (arr.length) { const exSet = new Set(Array.isArray(exclude)?exclude:[]); return arr.map(asVideo).filter(v => v && v.id && !exSet.has(v.id)); }
       }
     } catch(e) { LOG("server POST fail:", e); }
 
@@ -100,13 +152,15 @@ export class YTProProvider {
       if (longOnly) {
         params.set("duration", "long");
         params.set("durationSecMin", String(minSec));
+      const ex = (typeof window!=='undefined' && window.__ASSIST_SEEN_IDS && typeof window.__ASSIST_SEEN_IDS.forEach==='function') ? Array.from(window.__ASSIST_SEEN_IDS) : [];
+      ex.forEach(id=>params.append('exclude', id));
       }
       const url = `${this.apiBase.replace(/\/$/, "")}/yt/search?${params}`;
       const res = await fetch(url, { credentials: "omit" });
       if (res.ok) {
         const data = await res.json();
         const arr = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []);
-        if (arr.length) return arr.map(asVideo);
+        if (arr.length) { const exSet = new Set((typeof window!=='undefined' && window.__ASSIST_SEEN_IDS && typeof window.__ASSIST_SEEN_IDS.forEach==='function') ? Array.from(window.__ASSIST_SEEN_IDS) : []); return arr.map(asVideo).filter(v => v && v.id && !exSet.has(v.id)); }
       }
     } catch(e) { LOG("server GET fail:", e); }
 
@@ -154,33 +208,9 @@ export class YTProProvider {
 
   async searchManyLong(q, limit=12, type="movie") {
     try {
-      limit = Math.max(6, Math.min(20, Number(limit) || 10));
       let arr = await this.serverSearch(q, { type, longOnly: true, limit: limit*3 });
       if (!arr.length) arr = await this.ytSearch(q, { longOnly: true, limit: limit*3 });
-      // строгая фильтрация
-      arr = arr.filter(v => this._isLong(v, type));
-      // если всё равно пусто — пробуем any, но всё равно фильтруем клиентски
-      if (!arr.length) {
-        let arr2 = await this.serverSearch(q, { type, longOnly: false, limit: limit*4 });
-        if (!arr2.length) arr2 = await this.ytSearch(q, { longOnly: false, limit: limit*4 });
-        arr = arr2.filter(v => this._isLong(v, type));
-      }
-      // дедуп/обрезка
-      const seen = new Set(); const out = [];
-      for (const it of arr) {
-        const id = it && (it.id || it.videoId);
-        if (!id || seen.has(id)) continue;
-        seen.add(id); out.push(it);
-        if (out.length >= limit) break;
-      }
-      return out;
-    } catch { return []; }
-  }
-
-  async searchManyAny(q, limit=12, type="movie") {
-    try {
-      let arr = await this.serverSearch(q, { type, longOnly: false, limit: limit*3 });
-      if (!arr.length) arr = await this.ytSearch(q, { longOnly: false, limit: limit*3 });
+      if (!arr.length) arr = await this.searchManyAny(q, limit, type);
       return arr.slice(0, Math.max(1, Math.min(50, limit)));
     } catch { return []; }
   }
