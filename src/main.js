@@ -8,9 +8,10 @@ import './js/assistant/fullscreen.js';
 import './js/assistant/help.js';
 import './js/assistant/assistant-hooks.js';
 import './js/assistant/chat.js';
+import './js/assistant/longform.js';
 import './js/assistant/chat.longform.merge.js';
 import './js/assistant/yt-pro-provider.js';
-import './js/assistant/longform.js';
+
 import './js/assistant/anchors-safety.js';
 import './js/assistant/resume.js';
 import './js/assistant/patches/p1_preventDefault_fix.js';

@@ -2,13 +2,15 @@
    - Вернули HARD-GUARD (роут assistant:play/radio/music.play в PRO)
    - Жёсткая клиентская фильтрация коротышей (movie ≥ 60m, audiobook ≥ 30m)
    - long-only обогащение (searchManyLong строго длинные)
-   - респектуем detail.limit (6..20)
+   - респектуем detail.limit (1..CARDS_MAX)
    - гидрация заголовков, дедуп карточек
 */
 
 import { YTProProvider } from "./yt-pro-provider.js";
 try{ window.__ASSIST_LONGFORM_MERGE_ACTIVE = true; }catch{}
 try{ window.__AS_CARDS_ACTIVE = true; }catch{}
+try{ if (typeof window!=='undefined' && (window.__PRO_CARDS_MAX==null)) window.__PRO_CARDS_MAX = 6; }catch{}
+const CARDS_MAX = (typeof window !== 'undefined' && window.__PRO_CARDS_MAX) ? Number(window.__PRO_CARDS_MAX) : 6;
 const LOG = (...a) => { try { (console.debug||console.log).call(console, "[chat.longform.merge]", ...a)} catch {} };
 
 const DEFAULT_SELECTORS = {
@@ -200,9 +202,9 @@ function hardDedupeCards(){
 }
 
 /* ==== Рендер карточек ==== */
-async function renderList({ items, type='movie', q='', kind='suggest', limit=12 }) {
+async function renderList({ items, type='movie', q='', kind='suggest', limit=CARDS_MAX}) {
   const feed = qs(getSelectors().feed); if (!feed) return;
-  limit = Math.max(6, Math.min(20, Number(limit)||12));
+  limit = Math.max(1, Math.min(CARDS_MAX, Number(limit)||CARDS_MAX));
 
   // нормализация
   try { items = (items||[]).map(normItem).filter(Boolean); } catch {}
@@ -226,7 +228,7 @@ async function renderList({ items, type='movie', q='', kind='suggest', limit=12 
   items = items.slice(0, limit);
 
   // если сервер дал мало или у всех неизвестна длительность — дотягиваем СТРОГО long-only через provider
-  if (items.length < Math.min(6, limit)) {
+  if (items.length < Math.min(CARDS_MAX, limit)) {
     try {
       const qBuilt = provider.buildQuery({ type, title: q || '', mood:'', actor:'' });
       const more = await provider.searchManyLong(qBuilt, limit, type); // OK, лишние аргументы игнорируются если не поддерживается
@@ -331,7 +333,7 @@ window.addEventListener('assistant:pro.suggest.result', async (e) => {
       title: d.title || '',
       mood: d.mood || '',
       actor: d.actor || '',
-      limit: Math.max(6, Math.min(20, Number(d.limit)||12))
+      limit: Math.max(1, Math.min(CARDS_MAX, Number(d.limit)||CARDS_MAX))
     };
     try { if (WD && WD.suggestTimer) { clearTimeout(WD.suggestTimer); WD.suggestTimer = null; } } catch {}
     const qBuilt = d.q || provider.buildQuery({ type: detail.type, title: detail.title, mood: detail.mood, actor: detail.actor });
@@ -358,7 +360,7 @@ function planSuggestWatchdog(detail) {
   const title = (detail && detail.title) || '';
   const mood  = (detail && detail.mood)  || '';
   const actor = (detail && detail.actor) || '';
-  const limit = Math.max(6, Math.min(20, Number(detail && detail.limit) || 12));
+  const limit = Math.max(1, Math.min(CARDS_MAX, Number(detail && detail.limit) || 12));
   const q = provider.buildQuery({ type, title, mood, actor });
   WD.suggestTimer = setTimeout(async () => {
     LOG("watchdog: no suggest.result in time — doing provider search", { type, title });
@@ -408,7 +410,7 @@ let _lastHandled = { text: "", ts: 0 };
         const now = Date.now();
         if (text === _lastHandled.text && (now - _lastHandled.ts) < 2000) { LOG("PAQ intercept: duplicate, skipping", text); return { handledByPro: true }; }
         _lastHandled = { text, ts: now };
-        const detail = { type:intent.type, title:intent.title, mood:intent.mood, actor:intent.actor, limit: 9 };
+        const detail = { type:intent.type, title:intent.title, mood:intent.mood, actor:intent.actor, limit: CARDS_MAX };
         LOG("PAQ intercept: dispatching", detail);
         if (intent.needSuggest || !intent.title || intent.type==='movie') {
           window.dispatchEvent(new CustomEvent('assistant:pro.suggest', { detail })); addMsg('note','Подбираю варианты…'); speak('Подбираю варианты'); planSuggestWatchdog(detail);
@@ -445,7 +447,7 @@ let _lastHandled = { text: "", ts: 0 };
       ev.stopPropagation && ev.stopPropagation();
       ev.preventDefault && ev.preventDefault();
 
-      const limit = Math.max(6, Math.min(20, Number(d.limit)||12));
+      const limit = Math.max(1, Math.min(CARDS_MAX, Number(d.limit)||CARDS_MAX));
       window.dispatchEvent(new CustomEvent('assistant:pro.suggest', {
         detail: { type: isAudio ? 'audiobook' : 'movie', title: q.trim(), limit }
       }));
@@ -463,7 +465,7 @@ let bound = false;
 async function handleSubmitText(v) {
   const intent = parseIntent(v); if (!intent) return false;
   addMsg('user', esc(v));
-  const detail = { type:intent.type, title:intent.title, mood:intent.mood, actor:intent.actor, limit: 9 };
+  const detail = { type:intent.type, title:intent.title, mood:intent.mood, actor:intent.actor, limit: CARDS_MAX };
   if (intent.needSuggest || !intent.title || intent.type==='movie') { window.dispatchEvent(new CustomEvent('assistant:pro.suggest', { detail })); addMsg('note','Подбираю варианты…'); speak('Подбираю варианты'); planSuggestWatchdog(detail); }
   else { window.dispatchEvent(new CustomEvent('assistant:pro.suggest', { detail })); addMsg('note', intent.type==='audiobook' ? 'Ищу и включаю аудиокнигу…' : 'Ищу и включаю фильм…'); speak(intent.type==='audiobook' ? 'Ищу аудиокнигу' : 'Ищу фильм'); planPlayWatchdog(detail); }
   return true;

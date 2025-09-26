@@ -8,6 +8,8 @@
  */
 
 const LOG = (...a) => { try { (console.debug||console.log).call(console, "[yt-pro-provider]", ...a)} catch {} };
+const CARDS_MAX = (typeof window !== 'undefined' && window.__PRO_CARDS_MAX) ? Number(window.__PRO_CARDS_MAX) : 6;
+
 
 function smartJoin(parts) { return parts.filter(Boolean).join(" ").replace(/\s+/g, " ").trim(); }
 
@@ -117,7 +119,7 @@ export class YTProProvider {
     return "https://www.youtube.com/results?search_query=" + encodeURIComponent(full);
   }
 
-  async serverSearch(q, { type="movie", longOnly=true, limit=10 } = {}) {
+  async serverSearch(q, { type="movie", longOnly=true, limit=CARDS_MAX } = {}) {
     const fetchMax = Math.max(24, Math.min(50, (Number(limit) || 10) * 3));
     const minSec = longOnly ? (type === "audiobook" ? 1800 : 3600) : 0;
 
@@ -206,7 +208,7 @@ export class YTProProvider {
     }
   }
 
-  async searchManyLong(q, limit=12, type="movie") {
+  async searchManyLong(q, limit=CARDS_MAX, type="movie") {
     try {
       let arr = await this.serverSearch(q, { type, longOnly: true, limit: limit*3 });
       if (!arr.length) arr = await this.ytSearch(q, { longOnly: true, limit: limit*3 });

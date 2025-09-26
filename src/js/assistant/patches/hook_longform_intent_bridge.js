@@ -28,7 +28,7 @@
     }
     const type = isAudiobook ? 'audiobook' : 'movie';
     const needSuggest = type === 'movie' ? true : !title;
-    return { type, title, needSuggest, limit: 12 };
+    return { type, title, needSuggest, limit: (window.__PRO_CARDS_MAX || 6) };
   }
 
   try {

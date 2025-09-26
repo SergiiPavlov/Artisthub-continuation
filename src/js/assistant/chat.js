@@ -1440,7 +1440,7 @@ try {
 
     const type = hasAudio ? "audiobook" : "movie";
     if (needSuggest) {
-      window.dispatchEvent(new CustomEvent('assistant:pro.suggest', { detail: { type, title, mood, actor, limit: 12 } }));
+      window.dispatchEvent(new CustomEvent('assistant:pro.suggest', { detail: { type, title, mood, actor, limit: (window.__PRO_CARDS_MAX || 6) } }));
       if (typeof addMsg==='function') addMsg("note", "Подбираю варианты…");
       if (typeof speak==='function') speak("Подбираю варианты");
       return;
@@ -1653,7 +1653,7 @@ try {
           .replace(/["«»„‟“”'`]/g, "")
           .trim();
         const type = hasAudio ? "audiobook" : "movie";
-        window.dispatchEvent(new CustomEvent("assistant:pro.play", { detail: { type, title, limit: 12 } }));
+        window.dispatchEvent(new CustomEvent("assistant:pro.play", { detail: { type, title, limit: (window.__PRO_CARDS_MAX || 6) } }));
         addMsg("note", type==="audiobook" ? "Ищу и включаю аудиокнигу…" : "Ищу и включаю фильм…");
         try { if (window.chat && window.chat.voice?.enabled) window.chat.voice.say(type==="audiobook" ? "Ищу аудиокнигу" : "Ищу фильм"); } catch {}
         return type==="audiobook" ? "Ищу и включаю аудиокнигу…" : "Ищу и включаю фильм…";
@@ -1706,7 +1706,7 @@ try {
             .replace(/["«»„‟“”'`]/g, "")
             .trim();
           const type = hasAudio ? "audiobook" : "movie";
-          window.dispatchEvent(new CustomEvent("assistant:pro.suggest", { detail: { type, title, limit: 12 } }));
+          window.dispatchEvent(new CustomEvent("assistant:pro.suggest", { detail: { type, title, limit: (window.__PRO_CARDS_MAX || 6) } }));
           addMsg("note", type==="audiobook" ? "Подбираю аудиокнигу…" : "Подбираю варианты фильма…");
           try { if (window.chat && window.chat.voice?.enabled) window.chat.voice.say(type==="audiobook" ? "Подбираю аудиокнигу" : "Подбираю варианты фильма"); } catch {}
           return "Подбираю варианты…";
@@ -2013,7 +2013,7 @@ try {
               const type = isAudio ? "audiobook" : "movie";
               e.stopImmediatePropagation && e.stopImmediatePropagation();
               e.preventDefault && e.preventDefault();
-              window.dispatchEvent(new CustomEvent('assistant:pro.play', { detail: { type, title, limit: 12 } }));
+              window.dispatchEvent(new CustomEvent('assistant:pro.play', { detail: { type, title, limit: (window.__PRO_CARDS_MAX || 6) } }));
             }
           }
         } catch (_){}
