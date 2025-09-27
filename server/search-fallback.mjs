@@ -1,13 +1,14 @@
-// server/search-fallback.mjs — v1.2.0 (2025-09-27)
-// YouTube fallback (Piped → HTML) + oEmbed-фильтр на «встраиваемость».
+// server/search-fallback.mjs — v1.2.2 (2025-09-27)
+// YouTube fallback (Piped → HTML) + oEmbed «встраиваемость» + мягкий title-aware буст.
 // Экспортирует: searchIdsFallback, filterEmbeddable
 
 const DEFAULT_MAX = 25;
 const VALID_ID = /^[A-Za-z0-9_-]{11}$/;
 const FALLBACK_MULTIPLIER = 3;
 const FALLBACK_HARD_CAP = 150;
+
 const CYRILLIC_RE = /[\u0400-\u04FF]/;
-const MOVIE_DURATION_MIN = 45 * 60; // 45 minutes
+const MOVIE_DURATION_MIN = 45 * 60; // 45 минут
 const TITLE_NEG = [
   'trailer','тизер','коротк','обзор','разбор','сцены','сцена','short','shorts','clip','clips',
   'teaser','preview','remix','music video','ost','саундтрек','soundtrack','amv',
@@ -22,7 +23,7 @@ function normalizeTitleText(input = '') {
   text = text.replace(/[“”«»„‟]/g, '"').replace(/[’‘‛]/g, "'");
   text = text.replace(/[\u2010-\u2015\u2212]/g, '-');
   try { text = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').normalize('NFC'); } catch {}
-  text = text.replace(/\u0451/g, 'е').replace(/\u0401/g, 'Е');
+  text = text.replace(/\u0451/g, 'е').replace(/\u0401/g, 'Е'); // ё→е
   return text.toLowerCase().replace(/\s+/g, ' ').trim();
 }
 function containsAny(text, arr) {
@@ -34,11 +35,22 @@ function isMovieQuery(q = '') {
   const t = normalizeTitleText(q);
   if (!t) return false;
   if (t.includes('полный фильм') || t.includes('full movie')) return true;
-  if (/(19|20)\d{2}/.test(q)) return true;
+  if (/(19|20)\d{2}/.test(q)) return true; // год — часто признак фильма
   if (t.includes('фильм') || t.includes('кино') || t.includes('movie') || t.includes('film')) return true;
   return false;
 }
 
+function parseDurationSeconds(raw) {
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) return raw;
+  if (typeof raw === 'string') {
+    const parts = raw.trim().split(':');
+    if (!parts.length || parts.some((p) => !/^\d+$/.test(p))) return null;
+    let acc = 0;
+    for (const part of parts) acc = acc * 60 + Number(part);
+    return Number.isFinite(acc) ? acc : null;
+  }
+  return null;
+}
 
 function uniqById(items) {
   const out = [];
@@ -50,26 +62,21 @@ function uniqById(items) {
     if (typeof item === 'string') {
       out.push({ id, duration: null, title: null });
     } else {
-      out.push({ id, duration: Number.isFinite(item?.duration) ? item.duration : null, title: typeof item?.title === 'string' ? item.title : null });
+      out.push({
+        id,
+        duration: Number.isFinite(item?.duration) ? item.duration : null,
+        title: typeof item?.title === 'string' ? item.title : null,
+      });
     }
   }
   return out;
 }
 
-function parseDurationSeconds(raw) {
-  if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) {
-    return raw;
-  }
-  if (typeof raw === 'string') {
-    const trimmed = raw.trim();
-    if (!trimmed) return null;
-    const parts = trimmed.split(':');
-    if (!parts.length || parts.some((p) => !/^\d+$/.test(p))) return null;
-    let acc = 0;
-    for (const part of parts) acc = acc * 60 + Number(part);
-    return Number.isFinite(acc) ? acc : null;
-  }
-  return null;
+// Быстрая проверка «встраиваемости» через oEmbed
+async function isEmbeddable(id, signal) {
+  const u = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`;
+  const r = await fetch(u, { signal }).catch(() => null);
+  return !!(r && r.ok);
 }
 
 async function pipedSearch(q, max, signal) {
@@ -102,7 +109,7 @@ async function htmlSearch(q, max, signal) {
   if (!r || !r.ok) return [];
   const html = await r.text();
   const out = [];
-  // Прямые videoId в JSON
+  // Прямые videoId в JSON (рядом достаём title)
   const reJSON = /"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"/g;
   let m;
   while ((m = reJSON.exec(html)) && out.length < max) {
@@ -112,39 +119,24 @@ async function htmlSearch(q, max, signal) {
       const around = html.slice(Math.max(0, m.index - 400), Math.min(html.length, m.index + 400));
       const t1 = around.match(/"title"\s*:\s*\{\s*"runs"\s*:\s*\[\s*\{\s*"text"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
       if (t1 && t1[1]) {
-        try { title = JSON.parse("\"" + t1[1].replace(/"/g,'\\\"') + "\""); } catch { title = t1[1]; }
+        try { title = JSON.parse('"' + t1[1].replace(/"/g, '\\"') + '"'); } catch { title = t1[1]; }
       }
       out.push({ id, duration: null, title });
     }
   }
-  // Доп. путь: из ссылок
+  // Доп. путь: из ссылок (без заголовка, чтобы не словить ещё один парсерный баг)
   if (out.length < max) {
     const reLink = /\/watch\?v=([A-Za-z0-9_-]{11})/g;
     let m2;
     while ((m2 = reLink.exec(html)) && out.length < max) {
       const id = m2[1];
-      if (VALID_ID.test(id)) {
-      let title = null;
-      const around = html.slice(Math.max(0, m2.index - 400), Math.min(html.length, m2.index + 400));
-      const t1 = around.match(/"title"\s*:\s*\{\s*"runs"\s*:\s*\[\s*\{\s*"text"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
-      if (t1 && t1[1]) {
-        try { title = JSON.parse("\"" + t1[1].replace(/"/g,'\\\"') + "\""); } catch { title = t1[1]; }
-      }
-      out.push({ id, duration: null, title });
-    }
+      if (VALID_ID.test(id)) out.push({ id, duration: null, title: null });
     }
   }
   return uniqById(out).slice(0, max);
 }
 
-// Быстрая проверка «встраиваемости» через oEmbed
-async function isEmbeddable(id, signal) {
-  const u = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`;
-  const r = await fetch(u, { signal }).catch(() => null);
-  return !!(r && r.ok);
-}
-
-// ⬇⬇⬇ ТЕПЕРЬ ЭКСПОРТИРУЕМ
+// Параллельный фильтр «встраиваемости» с сохранением порядка
 export async function filterEmbeddable(ids, { max, timeoutMs = 15000, concurrency = 8 } = {}) {
   const limit = Number.isFinite(max) && max > 0 ? Math.floor(max) : ids.length;
   const acceptedIdx = [];
@@ -168,6 +160,7 @@ export async function filterEmbeddable(ids, { max, timeoutMs = 15000, concurrenc
   return ordered.slice(0, limit);
 }
 
+// Основной фоллбэк-поиск с мягким title-aware бустом
 export async function searchIdsFallback(q, { max = DEFAULT_MAX, timeoutMs = 15000 } = {}) {
   const ctrl = new AbortController();
   const to = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -184,6 +177,8 @@ export async function searchIdsFallback(q, { max = DEFAULT_MAX, timeoutMs = 1500
     if (!combined.length) return [];
 
     const movieLike = isMovieQuery(q);
+    const normQ = normalizeTitleText(q);
+    const tokens = normQ.split(' ').filter((t) => t && t.length > 1);
 
     let enriched = combined.map((item, idx) => {
       const duration = Number.isFinite(item?.duration) ? item.duration : null;
@@ -192,20 +187,20 @@ export async function searchIdsFallback(q, { max = DEFAULT_MAX, timeoutMs = 1500
       return { id: item.id, duration, title, normTitle, idx };
     });
 
+    // Антишум по тайтлам (мягко)
     const neg = enriched.filter((x) => !x.normTitle || !containsAny(x.normTitle, TITLE_NEG));
     if (neg.length) enriched = neg;
 
+    // «Похож на фильм» → мягко предпочесть >= 45 мин (не строгий фильтр)
     if (movieLike) {
       const byLen = enriched.filter((x) => x.duration == null || x.duration >= MOVIE_DURATION_MIN);
       if (byLen.length) enriched = byLen;
     }
 
     function score(x) {
-      if (!x) return 0;
       let s = 0;
       if (x.normTitle) {
-        const tokens = normalizeTitleText(q).split(' ').filter(Boolean);
-        for (const t of tokens) if (t.length > 1 && x.normTitle.includes(t)) s++;
+        for (const t of tokens) if (x.normTitle.includes(t)) s++;
         if (containsAny(x.normTitle, TITLE_POS)) s += 1;
       }
       if (movieLike) {
@@ -227,10 +222,11 @@ export async function searchIdsFallback(q, { max = DEFAULT_MAX, timeoutMs = 1500
     const ids = enriched.map((x) => x.id);
     const filtered = await filterEmbeddable(ids, { max: limit, timeoutMs });
     const topId = filtered[0];
-    const titleMatched = !!topId && !!enriched.find(e => e.id === topId && score(e) > 0);
+    const titleMatched = !!topId && !!enriched.find((e) => e.id === topId && score(e) > 0);
     const meta = { candidatesTotal: enriched.length, titleMatched };
     Object.defineProperty(filtered, 'meta', { value: meta, enumerable: false });
     return filtered;
   } finally {
     clearTimeout(to);
   }
+}
