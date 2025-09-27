@@ -336,7 +336,7 @@ function inferActionsFromUser(text = '') {
     ['soundtrack', 'саундтрек|ost|original soundtrack'],
   ];
   for (const [canon, reStr] of gsyn) {
-    const re = new RegExp(`\b(?:${reStr})\b`, 'i');
+    const re = new RegExp(`\\b(?:${reStr})\\b`, 'i');
     if (re.test(t)) {
       actions.push({ type: 'recommend', genre: canon, autoplay: wantsPlay });
       break;
@@ -411,18 +411,33 @@ async function ytSearchMany(q = '', max = 25) {
   const limit = Math.max(1, Math.min(50, Number(max || 25)));
   const qStr = String(q);
 
-  // «похоже на фильм/аудиокнигу»
-  const movieLike = /(?:\bфильм|\bкино|\bполный\s+фильм|\bfull\s*movie|\bmovie|\bсериал|\bмультфильм|\bаудиокниг|audiobook)/i.test(qStr);
+  // Unicode-aware "movie-like" detection (works for RU/UA/EN)
+  // NOTE: \b doesn't work for Cyrillic in JS; use \p{L}\p{N} and lookarounds instead
+  const MOVIE_LIKE_RE = /(?<![\p{L}\p{N}_])(фильм|фильмы|кино|полный\s*фильм|full\s*movie|movie|сериал(?:ы)?|мультфильм(?:ы)?|аудио\s*книг\w*|аудиокниг\w*|audiobook)(?![\p{L}\p{N}_])/iu;
+  const movieLike = MOVIE_LIKE_RE.test(qStr);
 
-  // один шаг запроса к YouTube Search API
+  // language/region hint for relevance
+  const hasCyr = /[А-Яа-яЁёІіЇїҐґ]/.test(qStr);
+  const relevanceLanguage = hasCyr ? 'ru' : 'en';
+  const regionCode = hasCyr ? 'RU' : 'US';
+
+  // Title filters
+  const NEG_RE = /\b(trailer|teaser|shorts?|коротк|тизер|трейлер|обзор|моменты|сцены|выпуск|серия|серии|best\s*moments|moment|клип|clip|remix|parody|gameplay|walkthrough|обрывок|нарезк|шорт|прикол|юмор)\b/iu;
+  const POS_MOV_RE = /\b(полный\s*фильм|full\s*movie|фильм|кино|audiobook|аудио\s*книг\w*)\b/iu;
+
+  // One API step
   async function doSearch(params) {
     const u = new URL('https://www.googleapis.com/youtube/v3/search');
-    u.searchParams.set('part', 'id');
+    u.searchParams.set('part', 'id,snippet'); // need titles to filter noise
     u.searchParams.set('type', 'video');
     u.searchParams.set('maxResults', String(limit));
     u.searchParams.set('order', params.order || 'relevance');
     u.searchParams.set('videoEmbeddable', 'true');
-    u.searchParams.set('q', qStr);
+    u.searchParams.set('videoSyndicated', 'true'); // better for embeddable
+    u.searchParams.set('relevanceLanguage', relevanceLanguage);
+    u.searchParams.set('regionCode', regionCode);
+    const extra = params.append || '';
+    u.searchParams.set('q', (qStr + ' ' + extra).trim());
     u.searchParams.set('key', YT_API_KEY);
     if (params.videoDuration) u.searchParams.set('videoDuration', params.videoDuration); // long/medium/short
 
@@ -433,15 +448,25 @@ async function ytSearchMany(q = '', max = 25) {
     const out = [];
     for (const it of items) {
       const id = it?.id?.videoId;
-      if (id && VALID_ID.test(id)) out.push(id);
+      if (!id || !VALID_ID.test(id)) continue;
+      const title = String(it?.snippet?.title || '');
+      if (NEG_RE.test(title)) continue;
+      if (movieLike && !POS_MOV_RE.test(title)) continue;
+      out.push(id);
     }
     return out;
   }
 
-  // Для «фильм-похожих» запросов — сначала long, потом any; иначе наоборот
   const plan = movieLike
-    ? [{ videoDuration: 'long' }, { /* any */ }]
-    : [{ /* any */ }, { videoDuration: 'long' }];
+    ? [
+        { videoDuration: 'long', order: 'relevance', append: 'full movie полный фильм' },
+        { videoDuration: 'long', order: 'viewCount' },
+        { /* any */ }
+      ]
+    : [
+        { /* any */ },
+        { videoDuration: 'long', order: 'relevance' }
+      ];
 
   const seen = new Set();
   for (const step of plan) {
@@ -498,9 +523,11 @@ app.post('/api/yt/search', async (req, res) => {
 
     if (!ids) {
       ids = [];
+      // 1) основная выдача YouTube (long-first логика уже внутри ytSearchMany)
       if (typeof YT_API_KEY === 'string' && YT_API_KEY) {
         ids = await ytSearchMany(q, max);
       }
+      // 2) если мало — добираем надёжным фолбэком
       if (!ids || ids.length < Math.max(3, Math.floor(max / 4))) {
         try {
           const extra = await searchIdsFallback(q, { max });
@@ -510,9 +537,8 @@ app.post('/api/yt/search', async (req, res) => {
           console.warn('[yt.search] fallback failed', e?.message || e);
         }
       }
-      try {
-        ids = await filterEmbeddable(ids, { max });
-      } catch {}
+      // 3) и фильтруем «встраиваемость», чтобы плеер не падал
+      try { ids = await filterEmbeddable(ids, { max }); } catch {}
       cacheSet(key, ids);
     }
 
@@ -551,10 +577,6 @@ function randomMixSeed() {
 }
 
 /* ---------------- /api/chat ---------------- */
-// ⭐ Этот маршрут теперь:
-// - принимает ИЛИ body.message+history, ИЛИ body.messages (совместимость)
-// - уважает флаг ASSISTANT_INTENTS
-// - если интенты ничего не решили, падает в «plain chat»
 app.post('/api/chat', async (req, res) => {
   const t0 = Date.now();
   try {
