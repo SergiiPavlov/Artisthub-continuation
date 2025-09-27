@@ -505,7 +505,11 @@ app.get('/api/yt/cache/stats', (_req, res) => {
   res.json({ ok: true, size: __searchCache.size, ttl_ms: SEARCH_TTL_MS });
 });
 
+
 /* ---------------- /api/yt/search ------------------ */
+const FILTER_INPUT_MULTIPLIER = 3;
+const FILTER_INPUT_CAP = 150;
+
 app.post('/api/yt/search', async (req, res) => {
   const t0 = Date.now();
   try {
@@ -515,50 +519,55 @@ app.post('/api/yt/search', async (req, res) => {
       ? req.body.exclude.filter((id) => /^[A-Za-z0-9_-]{11}$/.test(id))
       : [];
     const shuffle = !!req.body?.shuffle;
+    const forceFallback = req.body?.forceFallback === true || req.body?.forceFallback === '1';
     if (!q) return res.status(400).json({ ids: [], error: 'no_query' });
 
     const key = cacheKey(q, max);
-    const cached = cacheGet(key);
-    let ids = cached ? [...cached] : null;
+    const cachedRaw = forceFallback ? null : cacheGet(key);
+    let ids = cachedRaw ? [...cachedRaw] : null;
+    const cached = !!ids;
+    let fallbackUsed = false;
+    let fallbackDelivered = false;
 
     if (!ids) {
-      ids = [];
+      const candidateSet = new Set();
+      const filterLimit = Math.max(max, Math.min(max * FILTER_INPUT_MULTIPLIER, FILTER_INPUT_CAP));
+      const fallbackThreshold = Math.max(3, Math.floor(max / 4));
 
-      // 1) Основная выдача YouTube (long-first логика уже внутри ytSearchMany)
-      if (typeof YT_API_KEY === 'string' && YT_API_KEY) {
-        ids = await ytSearchMany(q, max);
+      // 1) основная выдача YouTube (long-first логика уже внутри ytSearchMany)
+      if (!forceFallback && typeof YT_API_KEY === 'string' && YT_API_KEY) {
+        try {
+          const primary = await ytSearchMany(q, Math.min(filterLimit, 50));
+          for (const id of primary) candidateSet.add(id);
+        } catch (e) {
+          console.warn('[yt.search] primary failed', e?.message || e);
+        }
       }
 
-      // 2) Если мало — добираем надёжным фолбэком (много кандидатов + длинные выше)
-      if (!ids || ids.length < Math.max(3, Math.floor(max / 4))) {
+      // 2) если мало — добираем надёжным фолбэком
+      if (forceFallback || candidateSet.size < fallbackThreshold) {
+        fallbackUsed = true;
         try {
-          // тянем мета-объекты, чтобы знать длительность и лучше отфильтровать
-          const { searchVideosFallback } = await import('./search-fallback.mjs');
-          const items = await searchVideosFallback(q, {
-            max: Math.max(30, max * 3),
-            timeoutMs: 15000,
-          });
-          const extraIds = (items || [])
-            .sort((a, b) => (b.durationSec || 0) - (a.durationSec || 0)) // длинные наверх
-            .map(x => x.id)
-            .filter(Boolean);
-
-          const merged = Array.from(new Set([...(ids || []), ...extraIds]));
-          // даём фильтру достаточно «мяса», чтобы набрать 6 стабильно
-          ids = merged.slice(0, Math.max(max, 12));
+          const extra = await searchIdsFallback(q, { max: filterLimit, timeoutMs: 15000 });
+          if (extra.length) fallbackDelivered = true;
+          for (const id of extra) candidateSet.add(id);
         } catch (e) {
           console.warn('[yt.search] fallback failed', e?.message || e);
         }
       }
 
-      // 3) Фильтруем «встраиваемость», чтобы плеер не падал
+      // 3) и фильтруем «встраиваемость», чтобы плеер не падал
+      const candidates = Array.from(candidateSet).slice(0, filterLimit);
       try {
-        ids = await filterEmbeddable(ids, { max, concurrency: 8, timeoutMs: 15000 });
-      } catch {}
-
-      // 4) Кешируем только «полезные» ответы, чтобы не зафиксировать 1–2 id
-      if (Array.isArray(ids) && ids.length >= Math.min(4, max)) {
-        cacheSet(key, ids);
+        ids = await filterEmbeddable(candidates, { max, timeoutMs: 15000 });
+      } catch (e) {
+        console.warn('[yt.search] embeddable filter failed', e?.message || e);
+        ids = candidates.slice(0, max);
+      }
+      if (ids.length >= 4 && !forceFallback) cacheSet(key, ids);
+      if (!ids.length && candidateSet.size) {
+        // если фильтр всё равно не смог — вернём необработанные карточки (fallback/primary)
+        ids = Array.from(candidateSet).slice(0, max);
       }
     }
 
@@ -571,14 +580,12 @@ app.post('/api/yt/search', async (req, res) => {
     }
     out = out.slice(0, max);
 
-    return res.json({ ids: out, q, took: Date.now() - t0, cached: !!cached, excluded: exclude.length });
+    return res.json({ ids: out, q, took: Date.now() - t0, cached: !!cached, excluded: exclude.length, fallback: fallbackUsed || forceFallback, fallbackDelivered });
   } catch (e) {
     console.error('[yt.search] error', e);
     return res.status(500).json({ ids: [], error: 'server_error', took: Date.now() - t0 });
   }
 });
-
-
 /* ---------------- Микс-сиды (рандом) ---------------- */
 const MIX_SEEDS = [
   'lofi hip hop radio',
@@ -778,3 +785,4 @@ app.listen(PORT, () => {
     `Using PRO(base=${LLM.pro.base}, model=${LLM.pro.model}, key=${LLM.pro.key ? 'set' : 'no'}) | FREE(base=${LLM.free.base}, model=${LLM.free.model})  (${VERSION})`
   );
 });
+
