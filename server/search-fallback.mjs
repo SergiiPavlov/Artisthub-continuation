@@ -47,8 +47,11 @@ function uniqById(items) {
     const id = typeof item === 'string' ? item : item?.id;
     if (!id || seen.has(id)) continue;
     seen.add(id);
-    if (typeof item === 'string') out.push(item);
-    else out.push({ id, duration: Number.isFinite(item?.duration) ? item.duration : null });
+    if (typeof item === 'string') {
+      out.push({ id, duration: null, title: null });
+    } else {
+      out.push({ id, duration: Number.isFinite(item?.duration) ? item.duration : null, title: typeof item?.title === 'string' ? item.title : null });
+    }
   }
   return out;
 }
@@ -122,7 +125,7 @@ async function htmlSearch(q, max, signal) {
       const id = m2[1];
       if (VALID_ID.test(id)) {
       let title = null;
-      const around = html.slice(Math.max(0, m.index - 400), Math.min(html.length, m.index + 400));
+      const around = html.slice(Math.max(0, m2.index - 400), Math.min(html.length, m2.index + 400));
       const t1 = around.match(/"title"\s*:\s*\{\s*"runs"\s*:\s*\[\s*\{\s*"text"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
       if (t1 && t1[1]) {
         try { title = JSON.parse("\"" + t1[1].replace(/"/g,'\\\"') + "\""); } catch { title = t1[1]; }
@@ -231,32 +234,3 @@ export async function searchIdsFallback(q, { max = DEFAULT_MAX, timeoutMs = 1500
   } finally {
     clearTimeout(to);
   }
-}
- = {}) {
-  const ctrl = new AbortController();
-  const to = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    const limit = Math.max(1, Math.min(FALLBACK_HARD_CAP, Number(max) || DEFAULT_MAX));
-    const candidateLimit = Math.max(limit, Math.min(limit * FALLBACK_MULTIPLIER, FALLBACK_HARD_CAP));
-
-    const piped = await pipedSearch(q, candidateLimit, ctrl.signal);
-    let combined = piped;
-    if (combined.length < candidateLimit) {
-      const html = await htmlSearch(q, candidateLimit, ctrl.signal);
-      combined = uniqById([...combined, ...html]).slice(0, candidateLimit);
-    }
-    if (!combined.length) return [];
-
-    // длинные выше
-    combined.sort((a, b) => {
-      const da = Number.isFinite(a.duration) ? a.duration : -1;
-      const db = Number.isFinite(b.duration) ? b.duration : -1;
-      return db - da;
-    });
-
-    const ids = combined.map((item) => item.id);
-    return await filterEmbeddable(ids, { max: limit, timeoutMs });
-  } finally {
-    clearTimeout(to);
-  }
-}
