@@ -528,6 +528,7 @@ app.post('/api/yt/search', async (req, res) => {
     const cached = !!ids;
     let fallbackUsed = false;
     let fallbackDelivered = false;
+    let fallbackMeta = null;
 
     if (!ids) {
       const candidateSet = new Set();
