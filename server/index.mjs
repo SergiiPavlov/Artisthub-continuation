@@ -483,6 +483,7 @@ async function ytSearchMany(q = '', max = 25) {
   return Array.from(seen);
 }
 
+
 /* ---------------- Cache helpers ------------------ */
 const __searchCache = new Map(); // key → { ids, exp }
 const SEARCH_TTL_MS = 24 * 60 * 60 * 1000; // 24h
