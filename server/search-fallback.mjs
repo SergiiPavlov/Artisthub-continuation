@@ -238,7 +238,11 @@ export async function filterEmbeddable(ids, { max, timeoutMs = 15000, concurrenc
   }
   const ordered = acceptedIdx.sort((a, b) => a - b).map((idx) => ids[idx]);
   return ordered.slice(0, limit);
+
+  // ultra-safe: if nothing survived, keep original order to preserve cards
+  if (!ordered.length) return ids.slice(0, limit);
 }
+
 
 // --------- Ранжирование: ядро запроса, Dice, год, письменность, длительность ---------
 function extractQueryCore(normQ) {
@@ -477,7 +481,41 @@ export async function searchIdsFallback(q, { max = DEFAULT_MAX, timeoutMs = 1500
       topScore = scored[0]?.score ?? 0;
     }
 
-    const ids = scored.map((x) => x.id);
+    let ordered = scored;
+if (movieLike) {
+  const MIN_AUTOPLAY = Number(process.env.FB_AUTOPLAY_MIN_SEC || 3600); // 60 min
+  const SHORT_DROP   = Number(process.env.FB_SHORT_DROP_SEC   || 1200); // 20 min
+
+  const coreHit = (e) => {
+    if (!e.normTitle) return false;
+    const ntVariants = makeVariants(e.normTitle);
+    let hits = 0;
+    for (const tok of coreTokens) {
+      for (const v of ntVariants) { if (v.includes(tok)) { hits++; break; } }
+    }
+    return coreTokens.length ? (hits > 0) : true;
+  };
+
+  const prefer = [];
+  const mid    = [];
+  const short  = [];
+
+  for (const e of scored) {
+    const d = Number.isFinite(e.duration) ? e.duration : null;
+    if (d == null || d >= MIN_AUTOPLAY) prefer.push(e);
+    else if (d >= SHORT_DROP)          mid.push(e);
+    else                               short.push(e);
+  }
+
+  const preferCore = prefer.filter(coreHit);
+  ordered = [
+    ...(preferCore.length ? preferCore : prefer),
+    ...mid,
+    ...(String(process.env.FB_HIDE_SHORTS || '0') === '1' ? [] : short),
+  ];
+}
+
+const ids = ordered.map((e) => e.id);
     const filtered = await filterEmbeddable(ids, { max: limit, timeoutMs });
 
     const topId = filtered[0];
