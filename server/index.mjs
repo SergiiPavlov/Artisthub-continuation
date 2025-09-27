@@ -406,27 +406,58 @@ function replyForActions(actions = []) {
 /* ---------------- YouTube helpers ---------------- */
 async function ytSearchMany(q = '', max = 25) {
   if (!YT_API_KEY || !q) return [];
+
+  const VALID_ID = /^[A-Za-z0-9_-]{11}$/;
   const limit = Math.max(1, Math.min(50, Number(max || 25)));
-  const u = new URL('https://www.googleapis.com/youtube/v3/search');
-  u.searchParams.set('part', 'id');
-  u.searchParams.set('type', 'video');
-  u.searchParams.set('maxResults', String(limit));
-  u.searchParams.set('order', 'relevance');
-  u.searchParams.set('videoDuration', 'medium');
-  u.searchParams.set('videoEmbeddable', 'true');
-  u.searchParams.set('q', q);
-  u.searchParams.set('key', YT_API_KEY);
-  const r = await fetch(String(u)).catch(() => null);
-  if (!r || !r.ok) return [];
-  const j = await r.json().catch(() => ({}));
-  const items = Array.isArray(j?.items) ? j.items : [];
-  const ids = [];
-  for (const it of items) {
-    const id = it?.id?.videoId;
-    if (id && /^[A-Za-z0-9_-]{11}$/.test(id)) ids.push(id);
+  const qStr = String(q);
+
+  // «похоже на фильм/аудиокнигу»
+  const movieLike = /(?:\bфильм|\bкино|\bполный\s+фильм|\bfull\s*movie|\bmovie|\bсериал|\bмультфильм|\bаудиокниг|audiobook)/i.test(qStr);
+
+  // один шаг запроса к YouTube Search API
+  async function doSearch(params) {
+    const u = new URL('https://www.googleapis.com/youtube/v3/search');
+    u.searchParams.set('part', 'id');
+    u.searchParams.set('type', 'video');
+    u.searchParams.set('maxResults', String(limit));
+    u.searchParams.set('order', params.order || 'relevance');
+    u.searchParams.set('videoEmbeddable', 'true');
+    u.searchParams.set('q', qStr);
+    u.searchParams.set('key', YT_API_KEY);
+    if (params.videoDuration) u.searchParams.set('videoDuration', params.videoDuration); // long/medium/short
+
+    const r = await fetch(String(u)).catch(() => null);
+    if (!r || !r.ok) return [];
+    const j = await r.json().catch(() => ({}));
+    const items = Array.isArray(j?.items) ? j.items : [];
+    const out = [];
+    for (const it of items) {
+      const id = it?.id?.videoId;
+      if (id && VALID_ID.test(id)) out.push(id);
+    }
+    return out;
   }
-  return Array.from(new Set(ids)).slice(0, limit);
+
+  // Для «фильм-похожих» запросов — сначала long, потом any; иначе наоборот
+  const plan = movieLike
+    ? [{ videoDuration: 'long' }, { /* any */ }]
+    : [{ /* any */ }, { videoDuration: 'long' }];
+
+  const seen = new Set();
+  for (const step of plan) {
+    const ids = await doSearch(step);
+    for (const id of ids) {
+      if (!seen.has(id)) {
+        seen.add(id);
+        if (seen.size >= limit) break;
+      }
+    }
+    if (seen.size >= limit) break;
+  }
+
+  return Array.from(seen);
 }
+
 
 /* ---------------- Cache helpers ------------------ */
 const __searchCache = new Map(); // key → { ids, exp }
