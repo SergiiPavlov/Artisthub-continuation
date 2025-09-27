@@ -1,6 +1,7 @@
-// server/search-fallback.mjs — v1.3.2 (2025-09-27)
+// server/search-fallback.mjs — v1.3.3 (2025-09-27)
 // YouTube fallback (Piped → HTML) + oEmbed «встраиваемость»
 // Мягкий title-aware ранжировщик: ядро запроса, Dice, год, письменность, длительность, 1-pass expansion
+// Улучшено: кириллица↔транслит в скоринге, длительность из HTML, мягкий штраф за unknown duration
 // Экспортирует: searchIdsFallback, filterEmbeddable
 //
 // Публичный контракт ответа НЕ меняется. Диагностика — только невидимой метой массива ids.
@@ -52,6 +53,23 @@ function normalizeTitleText(input = '') {
   try { text = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').normalize('NFC'); } catch {}
   text = text.replace(/\u0451/g, 'е').replace(/\u0401/g, 'Е'); // ё→е
   return text.toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+// Простая транслитерация RU→LAT для сопоставления
+const RU2LAT = {
+  'а':'a','б':'b','в':'v','г':'g','д':'d','е':'e','ё':'e','ж':'zh','з':'z','и':'i','й':'i',
+  'к':'k','л':'l','м':'m','н':'n','о':'o','п':'p','р':'r','с':'s','т':'t','у':'u','ф':'f',
+  'х':'kh','ц':'ts','ч':'ch','ш':'sh','щ':'shch','ъ':'','ы':'y','ь':'','э':'e','ю':'yu','я':'ya'
+};
+function ruToLat(s = '') {
+  let out = '';
+  for (let i = 0; i < s.length; i++) out += (RU2LAT[s[i]] ?? s[i]);
+  return out;
+}
+function makeVariants(norm = '') {
+  const a = norm || '';
+  const b = ruToLat(a);
+  return b !== a ? [a, b] : [a];
 }
 
 function containsAny(text, arr) {
@@ -163,22 +181,30 @@ async function htmlSearch(q, max, signal) {
   if (!r || !r.ok) return [];
   const html = await r.text();
   const out = [];
-  // videoId в JSON (рядом тянем title)
+  // videoId в JSON (рядом тянем title и lengthText)
   const reJSON = /"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"/g;
   let m;
   while ((m = reJSON.exec(html)) && out.length < max) {
     const id = m[1];
     if (VALID_ID.test(id)) {
       let title = null;
+      let dur = null;
       const around = html.slice(Math.max(0, m.index - 400), Math.min(html.length, m.index + 400));
       const t1 = around.match(/"title"\s*:\s*\{\s*"runs"\s*:\s*\[\s*\{\s*"text"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
+      const l1 = around.match(/"lengthText"\s*:\s*\{\s*"simpleText"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
       if (t1 && t1[1]) {
         try { title = JSON.parse('"' + t1[1].replace(/"/g, '\\"') + '"'); } catch { title = t1[1]; }
       }
-      out.push({ id, duration: null, title });
+      if (l1 && l1[1]) {
+        try {
+          const s = JSON.parse('"' + l1[1].replace(/"/g, '\\"') + '"');
+          dur = parseClockToSec(s);
+        } catch { dur = parseClockToSec(l1[1]); }
+      }
+      out.push({ id, duration: Number.isFinite(dur) ? dur : null, title });
     }
   }
-  // запасной путь: ссылки (без тайтла, чтобы не ловить баги контекста)
+  // запасной путь: ссылки (без тайтла)
   if (out.length < max) {
     const reLink = /\/watch\?v=([A-Za-z0-9_-]{11})/g;
     let m2;
@@ -290,6 +316,7 @@ export async function searchIdsFallback(q, { max = DEFAULT_MAX, timeoutMs = 1500
     const coreTokens = tokenize(queryCore);
     const fallbackTokens = tokenize(normQ);
     const queryYears = extractYears(normQ);
+    const qVariants = makeVariants(queryCore || normQ);
 
     let enriched = combined.map((item, idx) => {
       const duration = Number.isFinite(item?.duration) ? item.duration : null;
@@ -298,21 +325,46 @@ export async function searchIdsFallback(q, { max = DEFAULT_MAX, timeoutMs = 1500
       return { id: item.id, duration, title, normTitle, idx };
     });
 
+    const longExists = enriched.some((e) => Number.isFinite(e.duration) && e.duration >= MOVIE_MEDIUM_DURATION);
+
     // Мягкий ранжировщик (без жёстких фильтров)
     function scoreEntry(e) {
       const nt = e.normTitle || '';
+      const ntVariants = makeVariants(nt);
       let score = 0;
       let fuzzyScore = 0;
       let yearMatched = false;
       let shortPenaltyHits = 0;
 
       if (nt) {
-        if (queryCore && nt.includes(queryCore)) score += 3;
-        for (const t of coreTokens) if (nt.includes(t)) score += 0.75;
-        if (!coreTokens.length) for (const t of fallbackTokens) if (nt.includes(t)) score += 0.5;
+        // Точное вхождение ядра — по любому варианту (RU/LAT)
+        if (queryCore) {
+          for (const v of ntVariants) { if (v.includes(queryCore)) { score += 3; break; } }
+        }
+        // Покрытие токенов ядра — по любому варианту (RU/LAT)
+        let matchedCore = 0;
+        for (const tok of coreTokens) {
+          let ok = false;
+          for (const v of ntVariants) { if (v.includes(tok)) { ok = true; break; } }
+          if (ok) matchedCore++;
+        }
+        score += matchedCore * 0.75;
+        if (!coreTokens.length) {
+          // fallback-токены — чуточку слабее
+          for (const tok of fallbackTokens) {
+            let ok = false;
+            for (const v of ntVariants) { if (v.includes(tok)) { ok = true; break; } }
+            if (ok) score += 0.5;
+          }
+        }
 
-        const fuzzyBase = queryCore || normQ;
-        fuzzyScore = diceCoefficient(nt, fuzzyBase);
+        // Dice по лучшей паре RU/LAT
+        let best = 0;
+        for (const v of ntVariants) for (const b of qVariants) {
+          const d = diceCoefficient(v, b);
+          if (d > best) best = d;
+        }
+        fuzzyScore = best;
         if (fuzzyScore >= 0.8) score += 2;
         else if (fuzzyScore >= 0.6) score += 1;
 
@@ -334,17 +386,31 @@ export async function searchIdsFallback(q, { max = DEFAULT_MAX, timeoutMs = 1500
           }
         }
 
-        if (hasScriptMismatch(normQ, nt)) score -= 0.4;
+        // Если ядро есть (>=2 токена) и покрытие слабое — мягкий минус
+        if (coreTokens.length >= 2) {
+          const coverage = matchedCore / coreTokens.length;
+          if (coverage < 0.5) score -= 0.6;
+        }
+
+        // Штраф за «разную письменность» — только если RU/LAT-попаданий нет
+        const anyCoreHit = (coreTokens.length ? matchedCore > 0 : true) || (fuzzyScore >= 0.6) || (queryCore && ntVariants.some(v => v.includes(queryCore)));
+        if (!anyCoreHit && hasScriptMismatch(normQ, nt)) score -= 0.4;
       }
 
       if (movieLike) {
         if (Number.isFinite(e.duration)) {
           if (e.duration >= MOVIE_STRONG_DURATION) score += 1.5;
           else if (e.duration >= MOVIE_MEDIUM_DURATION) score += 0.6;
-          else if (e.duration > 0 && e.duration < SHORT_STRONG_THRESHOLD) {
+          else if (e.duration > 0 && e.duration < 15 * 60) {
+            score -= 1.8; // сильнее давим совсем короткие
+            shortPenaltyHits++;
+          } else if (e.duration > 0 && e.duration < SHORT_STRONG_THRESHOLD) {
             score -= 1.2;
             shortPenaltyHits++;
           }
+        } else if (longExists) {
+          // мягкий минус за неизвестную длительность, если в выдаче есть уверенно длинные
+          score -= 0.4;
         }
       } else if (Number.isFinite(e.duration) && e.duration >= MOVIE_DURATION_MIN) {
         score += 0.3;
