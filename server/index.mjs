@@ -523,23 +523,43 @@ app.post('/api/yt/search', async (req, res) => {
 
     if (!ids) {
       ids = [];
-      // 1) основная выдача YouTube (long-first логика уже внутри ytSearchMany)
+
+      // 1) Основная выдача YouTube (long-first логика уже внутри ytSearchMany)
       if (typeof YT_API_KEY === 'string' && YT_API_KEY) {
         ids = await ytSearchMany(q, max);
       }
-      // 2) если мало — добираем надёжным фолбэком
+
+      // 2) Если мало — добираем надёжным фолбэком (много кандидатов + длинные выше)
       if (!ids || ids.length < Math.max(3, Math.floor(max / 4))) {
         try {
-          const extra = await searchIdsFallback(q, { max });
-          const merged = Array.from(new Set([...(ids || []), ...extra]));
-          ids = merged.slice(0, max);
+          // тянем мета-объекты, чтобы знать длительность и лучше отфильтровать
+          const { searchVideosFallback } = await import('./search-fallback.mjs');
+          const items = await searchVideosFallback(q, {
+            max: Math.max(30, max * 3),
+            timeoutMs: 15000,
+          });
+          const extraIds = (items || [])
+            .sort((a, b) => (b.durationSec || 0) - (a.durationSec || 0)) // длинные наверх
+            .map(x => x.id)
+            .filter(Boolean);
+
+          const merged = Array.from(new Set([...(ids || []), ...extraIds]));
+          // даём фильтру достаточно «мяса», чтобы набрать 6 стабильно
+          ids = merged.slice(0, Math.max(max, 12));
         } catch (e) {
           console.warn('[yt.search] fallback failed', e?.message || e);
         }
       }
-      // 3) и фильтруем «встраиваемость», чтобы плеер не падал
-      try { ids = await filterEmbeddable(ids, { max }); } catch {}
-      cacheSet(key, ids);
+
+      // 3) Фильтруем «встраиваемость», чтобы плеер не падал
+      try {
+        ids = await filterEmbeddable(ids, { max, concurrency: 8, timeoutMs: 15000 });
+      } catch {}
+
+      // 4) Кешируем только «полезные» ответы, чтобы не зафиксировать 1–2 id
+      if (Array.isArray(ids) && ids.length >= Math.min(4, max)) {
+        cacheSet(key, ids);
+      }
     }
 
     let out = Array.isArray(ids) ? ids.filter((id) => !exclude.includes(id)) : [];
@@ -557,6 +577,7 @@ app.post('/api/yt/search', async (req, res) => {
     return res.status(500).json({ ids: [], error: 'server_error', took: Date.now() - t0 });
   }
 });
+
 
 /* ---------------- Микс-сиды (рандом) ---------------- */
 const MIX_SEEDS = [
