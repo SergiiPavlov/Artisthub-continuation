@@ -1,9 +1,9 @@
-// server/search-fallback.mjs — v1.3.1 (2025-09-27)
+// server/search-fallback.mjs — v1.3.2 (2025-09-27)
 // YouTube fallback (Piped → HTML) + oEmbed «встраиваемость»
-// Мягкий, но умный title-aware ранжировщик (ядро запроса, Dice, год, письменность, длительность)
+// Мягкий title-aware ранжировщик: ядро запроса, Dice, год, письменность, длительность, 1-pass expansion
 // Экспортирует: searchIdsFallback, filterEmbeddable
 //
-// NOTE: Публичный контракт ответа НЕ меняется. Доп. диагностика — только невидимой метой массива ids.
+// Публичный контракт ответа НЕ меняется. Диагностика — только невидимой метой массива ids.
 
 const DEFAULT_MAX = 25;
 const VALID_ID = /^[A-Za-z0-9_-]{11}$/;
@@ -16,10 +16,10 @@ const LATIN_RE = /[A-Za-z]/;
 const MOVIE_DURATION_MIN = 45 * 60;      // 45m — «длиннее плейлиста»
 const MOVIE_STRONG_DURATION = 75 * 60;   // 75m — уверенный полный метр
 const MOVIE_MEDIUM_DURATION = 60 * 60;   // 60..74m — ок
-const SHORT_STRONG_THRESHOLD = 20 * 60;  // <20m — почти точно «коротыш»
+const SHORT_STRONG_THRESHOLD = 25 * 60;  // <25m — уверенный «коротыш» для movie-like
 
 const SCORE_EXPANSION_THRESHOLD = 4;     // при слабом топе — одна попытка расширения
-const SCORE_PENALTY_CAP = 3;             // ограничение количества штрафов за маркеры шума
+const SCORE_PENALTY_CAP = 3;             // кап штрафов за маркеры шума
 
 // Стоп-слова, которые убираем из запроса, чтобы выделить «ядро»
 const CORE_STOP_PATTERNS = [
@@ -81,6 +81,26 @@ function parseDurationSeconds(raw) {
   return null;
 }
 
+// Разбор длительности в русских форматах + clock-строки (из «вчерашней» версии)
+function parseClockToSec(raw = '') {
+  const s = String(raw).trim().toLowerCase().replace(/\s+/g, ' ');
+  // hh:mm(:ss) или mm:ss
+  if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(s)) {
+    const parts = s.split(':').map((n) => parseInt(n, 10));
+    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    if (parts.length === 2) return parts[0] * 60 + parts[1];
+  }
+  // русские единицы: ч, м, с
+  let h = 0, m = 0, sec = 0;
+  const H = s.match(/(\d+)\s*ч/);      if (H) h = parseInt(H[1], 10);
+  const M = s.match(/(\d+)\s*м(?!с)/);  if (M) m = parseInt(M[1], 10);
+  const S = s.match(/(\d+)\s*с/);      if (S) sec = parseInt(S[1], 10);
+  if (h || m || sec) return h * 3600 + m * 60 + sec;
+  // просто число → секунды
+  const num = Number(s);
+  return Number.isFinite(num) ? num : null;
+}
+
 function uniqById(items) {
   const out = [];
   const seen = new Set();
@@ -110,7 +130,8 @@ async function isEmbeddable(id, signal) {
 
 async function pipedSearch(q, max, signal) {
   const base = (process.env.PIPED_INSTANCE || '').replace(/\/+$/, '') || 'https://piped.video';
-  const regionParam = CYRILLIC_RE.test(q) ? '&region=RU' : '';
+  const regionHint = (process.env.PIPED_REGION_HINT || 'RU').trim();
+  const regionParam = CYRILLIC_RE.test(q) && regionHint ? `&region=${encodeURIComponent(regionHint)}` : '';
   const url = `${base}/api/v1/search?q=${encodeURIComponent(q)}&filter=videos${regionParam}`;
   const r = await fetch(url, { signal }).catch(() => null);
   if (!r || !r.ok) return [];
@@ -121,9 +142,13 @@ async function pipedSearch(q, max, signal) {
     const vid = (it?.id && VALID_ID.test(it.id)) ? it.id
       : (typeof it?.url === 'string' && (it.url.match(/v=([A-Za-z0-9_-]{11})/)?.[1] || ''));
     if (vid && VALID_ID.test(vid)) {
+      let durationSec = parseDurationSeconds(it?.durationSeconds ?? it?.duration ?? null);
+      if (durationSec == null) {
+        durationSec = parseClockToSec(it?.durationText || it?.lengthText || '');
+      }
       out.push({
         id: vid,
-        duration: parseDurationSeconds(it?.durationSeconds ?? it?.duration ?? null),
+        duration: Number.isFinite(durationSec) ? durationSec : null,
         title: typeof it?.title === 'string' ? it.title : null,
       });
     }
@@ -291,7 +316,7 @@ export async function searchIdsFallback(q, { max = DEFAULT_MAX, timeoutMs = 1500
         if (fuzzyScore >= 0.8) score += 2;
         else if (fuzzyScore >= 0.6) score += 1;
 
-        if (containsAny(nt, TITLE_POSITIVE_MARKERS)) score += 0.5;
+        if (containsAny(nt, TITLE_POSITIVE_MARKERS)) score += 0.8;
 
         const titleYears = extractYears(nt);
         if (queryYears.size) {
