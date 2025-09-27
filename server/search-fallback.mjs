@@ -33,50 +33,12 @@ function parseDurationSeconds(raw) {
     for (const part of parts) acc = acc * 60 + Number(part);
     return Number.isFinite(acc) ? acc : null;
   }
-  
-function normalizeText(s = '') {
-  try { s = String(s || '').normalize('NFC'); } catch {}
-  s = s.replace(/[‐-―−]/g, '-').replace(/[“”«»„‟]/g, '"').replace(/[’‘‛]/g, "'");
-  s = s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').normalize('NFC');
-  s = s.replace(/\u0451/g, '\u0435').replace(/\u0401/g, '\u0415');
-  return s.toLowerCase();
-}
-function stripMovieWords(s = '') {
-  return s
-    .replace(/\b(полный\s*фильм|полный|фильм|кино|full\s*movie|movie|аудиокниг\w*|audiobook)\b/gi, ' ')
-    .replace(/\s{2,}/g, ' ')
-    .trim();
-}
-function scoreTitle(title = '', query = '', duration = null) {
-  const t = normalizeText(title);
-  const q = normalizeText(query);
-  const qCore = stripMovieWords(q);
-  let score = 0;
-
-  if (qCore && t.includes(qCore)) score += 6;
-  if (!qCore && t.includes(q)) score += 5;
-
-  const movieIntent = /\b(полный\s*фильм|full\s*movie|фильм|кино|аудиокниг\w*|audiobook)\b/i.test(q);
-  if (movieIntent && /\b(полный\s*фильм|full\s*movie|фильм|кино|аудиокниг\w*|audiobook)\b/i.test(title)) {
-    score += 2;
-  }
-
-  const d = Number.isFinite(duration) ? duration : -1;
-  if (movieIntent) {
-    if (d >= 4200) score += 2;
-    else if (d >= 3600) score += 1;
-  } else {
-    if (d >= 1800) score += 1;
-  }
-
-  return score;
-}
-return null;
+  return null;
 }
 
 async function pipedSearch(q, max, signal) {
   const base = (process.env.PIPED_INSTANCE || '').replace(/\/+$/, '') || 'https://piped.video';
-  const url = `${base}/api/v1/search?q=${encodeURIComponent(q)}&filter=videos&region=RU`;
+  const url = `${base}/api/v1/search?q=${encodeURIComponent(q)}&filter=videos`;
   const r = await fetch(url, { signal }).catch(() => null);
   if (!r || !r.ok) return [];
   const j = await r.json().catch(() => null);
@@ -86,26 +48,19 @@ async function pipedSearch(q, max, signal) {
     const vid = (it?.id && VALID_ID.test(it.id)) ? it.id
       : (typeof it?.url === 'string' && (it.url.match(/v=([A-Za-z0-9_-]{11})/)?.[1] || ''));
     if (vid && VALID_ID.test(vid)) {
-      const duration = parseDurationSeconds(it?.durationSeconds ?? it?.duration ?? null);
-      const title = typeof it?.title === 'string' ? it.title : '';
-      out.push({ id: vid, duration, title });
+      out.push({
+        id: vid,
+        duration: parseDurationSeconds(it?.durationSeconds ?? it?.duration ?? null),
+      });
     }
     if (out.length >= max) break;
   }
-  out.sort((a, b) => {
-    const sa = scoreTitle(a.title || '', q, a.duration);
-    const sb = scoreTitle(b.title || '', q, b.duration);
-    if (sb !== sa) return sb - sa;
-    const da = Number.isFinite(a.duration) ? a.duration : -1;
-    const db = Number.isFinite(b.duration) ? b.duration : -1;
-    return db - da;
-  });
   return uniqById(out);
 }
 
 async function htmlSearch(q, max, signal) {
   const u = `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`;
-  const r = await fetch(u, { headers: { 'Accept-Language': 'ru,en;q=0.8' }, signal }).catch(() => null);
+  const r = await fetch(u, { headers: { 'Accept-Language': 'en' }, signal }).catch(() => null);
   if (!r || !r.ok) return [];
   const html = await r.text();
   const out = [];
@@ -174,24 +129,14 @@ export async function searchIdsFallback(q, { max = DEFAULT_MAX, timeoutMs = 1500
     }
     if (!combined.length) return [];
 
-    // текстовая релевантность (если у элементов есть title), иначе — длинные выше
-    if (combined.length && typeof combined[0] === 'object' && 'title' in combined[0]) {
-      combined.sort((a, b) => {
-        const sa = scoreTitle(a.title || '', q, a.duration);
-        const sb = scoreTitle(b.title || '', q, b.duration);
-        if (sb !== sa) return sb - sa;
-        const da = Number.isFinite(a.duration) ? a.duration : -1;
-        const db = Number.isFinite(b.duration) ? b.duration : -1;
-        return db - da;
-      });
-    } else {
-      combined.sort((a, b) => {
-        const da = Number.isFinite(a.duration) ? a.duration : -1;
-        const db = Number.isFinite(b.duration) ? b.duration : -1;
-        return db - da;
-      });
-    }
-    const ids = combined.map((item) => item.id)((item) => item.id);
+    // длинные выше
+    combined.sort((a, b) => {
+      const da = Number.isFinite(a.duration) ? a.duration : -1;
+      const db = Number.isFinite(b.duration) ? b.duration : -1;
+      return db - da;
+    });
+
+    const ids = combined.map((item) => item.id);
     return await filterEmbeddable(ids, { max: limit, timeoutMs });
   } finally {
     clearTimeout(to);
