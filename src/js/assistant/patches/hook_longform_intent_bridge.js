@@ -39,6 +39,7 @@
         if (!intent) return orig.apply(this, arguments);
 
         log('longform intent', intent);
+        if (w.__ASSIST_LONGFORM_DEBUG__) { try { console.debug('[bridge]', { path: 'bridge', intent }); } catch {} }
 
         if (intent.needSuggest) {
           // 🔹 Сообщаем chat.js, что стандартный вызов ИИ не нужен для этого ввода

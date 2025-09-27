@@ -4,7 +4,7 @@ import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { registerTTS } from './tts.mjs';
-import { searchIdsFallback, filterEmbeddable } from './search-fallback.mjs';
+import { searchIdsFallback, searchVideosFallback, filterEmbeddable } from './search-fallback.mjs';
 
 // ▼ NEW: longform YouTube search route (separate endpoint /api/yt/search-long)
 import registerLongSearch from './patches/yt-longsearch.mjs';
@@ -436,9 +436,12 @@ function cacheGet(k) {
   const rec = __searchCache.get(k);
   if (!rec) return null;
   if (Date.now() > rec.exp) { __searchCache.delete(k); return null; }
-  return rec.ids || null;
+  return rec;
 }
-function cacheSet(k, ids) { __searchCache.set(k, { ids, exp: Date.now() + SEARCH_TTL_MS }); }
+function cacheSet(k, payload) {
+  const data = Array.isArray(payload) ? { ids: payload } : (payload || {});
+  __searchCache.set(k, { ids: data.ids || [], items: data.items || [], exp: Date.now() + SEARCH_TTL_MS });
+}
 
 app.get('/api/yt/cache/clear', (_req, res) => {
   const before = __searchCache.size;
@@ -463,17 +466,20 @@ app.post('/api/yt/search', async (req, res) => {
 
     const key = cacheKey(q, max);
     const cached = cacheGet(key);
-    let ids = cached ? [...cached] : null;
+    let ids = cached ? [...(cached.ids || [])] : null;
 
-    if (!ids) {
+    let fallbackItems = cached && Array.isArray(cached.items) ? [...cached.items] : [];
+    if (!ids || !ids.length) {
       ids = [];
       if (typeof YT_API_KEY === 'string' && YT_API_KEY) {
         ids = await ytSearchMany(q, max);
       }
       if (!ids || ids.length < Math.max(3, Math.floor(max / 4))) {
         try {
-          const extra = await searchIdsFallback(q, { max });
-          const merged = Array.from(new Set([...(ids || []), ...extra]));
+          const extraVideos = await searchVideosFallback(q, { max });
+          fallbackItems = Array.isArray(extraVideos) ? extraVideos.filter((it) => it && it.id) : [];
+          const extraIds = fallbackItems.map((it) => it.id);
+          const merged = Array.from(new Set([...(ids || []), ...extraIds]));
           ids = merged.slice(0, max);
         } catch (e) {
           console.warn('[yt.search] fallback failed', e?.message || e);
@@ -482,7 +488,11 @@ app.post('/api/yt/search', async (req, res) => {
       try {
         ids = await filterEmbeddable(ids, { max });
       } catch {}
-      cacheSet(key, ids);
+      if (fallbackItems.length) {
+        const allowed = new Set(ids);
+        fallbackItems = fallbackItems.filter((it) => it && allowed.has(it.id));
+      }
+      cacheSet(key, { ids, items: fallbackItems });
     }
 
     let out = Array.isArray(ids) ? ids.filter((id) => !exclude.includes(id)) : [];
@@ -494,7 +504,11 @@ app.post('/api/yt/search', async (req, res) => {
     }
     out = out.slice(0, max);
 
-    return res.json({ ids: out, q, took: Date.now() - t0, cached: !!cached, excluded: exclude.length });
+    if (fallbackItems.length) {
+      const allowed = new Set(out);
+      fallbackItems = fallbackItems.filter((it) => it && allowed.has(it.id));
+    }
+    return res.json({ ids: out, items: fallbackItems, q, took: Date.now() - t0, cached: !!cached, excluded: exclude.length });
   } catch (e) {
     console.error('[yt.search] error', e);
     return res.status(500).json({ ids: [], error: 'server_error', took: Date.now() - t0 });

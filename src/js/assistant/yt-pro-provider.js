@@ -1,15 +1,19 @@
 /*
  * yt-pro-provider.js
- * Версия: 1.5.1
+ * Версия: 1.6.0
  * Правки:
  *  - asVideo: считаем durationSec (ISO и clock-like), пробрасываем его.
  *  - searchOneLong/searchManyLong: жёсткая клиентская фильтрация по durationSec.
- *  - serverSearch: overfetch, безопасный /api суффикс.
+ *  - serverSearch: overfetch, безопасный /api суффикс, учёт fallback-метаданных.
+ *  - searchManyAny: безопасный fallback (любой хронометраж, с деталями).
  */
 
 const LOG = (...a) => { try { (console.debug||console.log).call(console, "[yt-pro-provider]", ...a)} catch {} };
 const CARDS_MAX = (typeof window !== 'undefined' && window.__PRO_CARDS_MAX) ? Number(window.__PRO_CARDS_MAX) : 6;
 
+const ID_RE = /^[A-Za-z0-9_-]{11}$/;
+const isDebug = () => { try { return !!window.__ASSIST_LONGFORM_DEBUG__; } catch { return false; } };
+const debugLog = (...args) => { if (isDebug()) LOG(...args); };
 
 function smartJoin(parts) { return parts.filter(Boolean).join(" ").replace(/\s+/g, " ").trim(); }
 
@@ -48,7 +52,6 @@ function enrichQueryParts(q, type="movie"){
   const y = parseYears(q);
   const c = detectCountryLang(q);
 
-  // prefer full-length hints
   if (type === 'movie') parts.push('full movie', 'фильм полностью', 'без рекламы');
   if (type === 'audiobook') parts.push('аудиокнига', 'полная версия');
 
@@ -85,10 +88,11 @@ function parseClockLike(s){
 
 function asVideo(obj) {
   const id = obj?.id?.videoId || obj?.id || obj?.videoId;
+  if (!id) return null;
   const title = obj?.snippet?.title || obj?.title || "(без названия)";
-  const thumbnail = obj?.snippet?.thumbnails?.medium?.url || obj?.thumbnail || "";
+  const thumbnail = obj?.snippet?.thumbnails?.medium?.url || obj?.thumbnail || `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
   const channel = obj?.snippet?.channelTitle || obj?.channel || "";
-  const iso = obj?.contentDetails?.duration || obj?.duration || ""; // может быть ISO или clock-like
+  const iso = obj?.contentDetails?.duration || obj?.duration || "";
   const secs =
     Number(obj?.durationSec || obj?.duration_seconds || obj?.lengthSeconds || obj?.length_seconds || 0) ||
     (typeof iso === 'string' && /PT/.test(iso) ? parseISO8601Duration(iso) : 0) ||
@@ -99,6 +103,11 @@ function asVideo(obj) {
     : `${Math.floor(secs/60)}:${String(secs%60).padStart(2,'0')}`) : "");
 
   return { id, videoId: id, title, thumbnail, channel, duration, durationSec: secs };
+}
+
+function collectExclude(rawExclude) {
+  const arr = Array.isArray(rawExclude) ? rawExclude : [];
+  return arr.filter((id) => typeof id === 'string' && ID_RE.test(id));
 }
 
 export class YTProProvider {
@@ -119,30 +128,67 @@ export class YTProProvider {
     return "https://www.youtube.com/results?search_query=" + encodeURIComponent(full);
   }
 
-  async serverSearch(q, { type="movie", longOnly=true, limit=CARDS_MAX } = {}) {
+  async serverSearch(q, opts = {}) {
+    const { type = "movie", longOnly = true, limit = CARDS_MAX, exclude = [] } = opts;
     const fetchMax = Math.max(24, Math.min(50, (Number(limit) || 10) * 3));
     const minSec = longOnly ? (type === "audiobook" ? 1800 : 3600) : 0;
+    const seenGlobal = (typeof window !== 'undefined' && window.__ASSIST_SEEN_IDS && typeof window.__ASSIST_SEEN_IDS.forEach === 'function')
+      ? Array.from(window.__ASSIST_SEEN_IDS).filter((id) => ID_RE.test(id)) : [];
+    const excludeList = Array.from(new Set([ ...collectExclude(exclude), ...seenGlobal ]));
+    const makeBody = () => ({
+      q,
+      max: fetchMax,
+      type,
+      videoEmbeddable: true,
+      exclude: excludeList,
+      ...(longOnly ? { duration: "long", filters: { durationSecMin: minSec } } : {})
+    });
 
-    // POST
+    const toVideoArray = (data) => {
+      const exSet = new Set(excludeList);
+      const items = Array.isArray(data?.items) ? data.items : [];
+      const ids = Array.isArray(data?.ids) ? data.ids.filter((id) => ID_RE.test(id)) : [];
+      const mapped = [];
+      for (const item of items) {
+        const norm = asVideo(item);
+        if (norm && norm.id && !exSet.has(norm.id)) {
+          mapped.push(norm);
+          exSet.add(norm.id);
+        }
+      }
+      for (const id of ids) {
+        if (exSet.has(id)) continue;
+        const norm = asVideo({ id });
+        if (norm && norm.id) {
+          mapped.push(norm);
+          exSet.add(norm.id);
+        }
+      }
+      return mapped;
+    };
+
+    // POST first
     try {
       const url = `${this.apiBase.replace(/\/$/, "")}/yt/search`;
-      const exclude = Array.isArray(opts?.exclude) ? opts.exclude
-  : (typeof window !== 'undefined' && window.__ASSIST_SEEN_IDS && typeof window.__ASSIST_SEEN_IDS.forEach === 'function'
-     ? Array.from(window.__ASSIST_SEEN_IDS) : []);
-      const body = { 
-        q,
-        max: fetchMax,
-        type,
-        videoEmbeddable: true,
-        ...(longOnly ? { duration: "long", filters: { durationSecMin: minSec } } : {})
-      , exclude };
-      const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), credentials: "omit" });
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(makeBody()),
+        credentials: "omit"
+      });
       if (res.ok) {
         const data = await res.json();
-        const arr = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []);
-        if (arr.length) { const exSet = new Set(Array.isArray(exclude)?exclude:[]); return arr.map(asVideo).filter(v => v && v.id && !exSet.has(v.id)); }
+        const arr = toVideoArray(data);
+        if (arr.length) {
+          debugLog('serverSearch:POST-hit', { q, longOnly, count: arr.length, fallback: !!(data?.items && data.items.length) });
+          return arr;
+        }
+      } else {
+        debugLog('serverSearch:POST-fail', { q, status: res.status });
       }
-    } catch(e) { LOG("server POST fail:", e); }
+    } catch (e) {
+      debugLog('serverSearch:POST-error', { q, err: String(e?.message || e) });
+    }
 
     // GET fallback
     try {
@@ -154,17 +200,23 @@ export class YTProProvider {
       if (longOnly) {
         params.set("duration", "long");
         params.set("durationSecMin", String(minSec));
-      const ex = (typeof window!=='undefined' && window.__ASSIST_SEEN_IDS && typeof window.__ASSIST_SEEN_IDS.forEach==='function') ? Array.from(window.__ASSIST_SEEN_IDS) : [];
-      ex.forEach(id=>params.append('exclude', id));
       }
+      excludeList.forEach((id) => params.append('exclude', id));
       const url = `${this.apiBase.replace(/\/$/, "")}/yt/search?${params}`;
       const res = await fetch(url, { credentials: "omit" });
       if (res.ok) {
         const data = await res.json();
-        const arr = Array.isArray(data?.items) ? data.items : (Array.isArray(data) ? data : []);
-        if (arr.length) { const exSet = new Set((typeof window!=='undefined' && window.__ASSIST_SEEN_IDS && typeof window.__ASSIST_SEEN_IDS.forEach==='function') ? Array.from(window.__ASSIST_SEEN_IDS) : []); return arr.map(asVideo).filter(v => v && v.id && !exSet.has(v.id)); }
+        const arr = toVideoArray(data);
+        if (arr.length) {
+          debugLog('serverSearch:GET-hit', { q, longOnly, count: arr.length, fallback: !!(data?.items && data.items.length) });
+          return arr;
+        }
+      } else {
+        debugLog('serverSearch:GET-fail', { q, status: res.status });
       }
-    } catch(e) { LOG("server GET fail:", e); }
+    } catch (e) {
+      debugLog('serverSearch:GET-error', { q, err: String(e?.message || e) });
+    }
 
     return [];
   }
@@ -183,14 +235,13 @@ export class YTProProvider {
       const res = await fetch(u.toString());
       const data = await res.json();
       if (!data || !Array.isArray(data.items)) return [];
-      return data.items.map(asVideo);
+      return data.items.map(asVideo).filter(Boolean);
     } catch (e) {
       LOG("ytSearch fail:", e);
       return [];
     }
   }
 
-  // --- strict long-only helpers
   _isLong(item, type){
     const min = type === "audiobook" ? 1800 : 3600;
     return (Number(item?.durationSec)||0) >= min;
@@ -200,7 +251,6 @@ export class YTProProvider {
     try {
       let arr = await this.serverSearch(q, { type, longOnly: true, limit: 15 });
       if (!arr.length) arr = await this.ytSearch(q, { longOnly: true, limit: 15 });
-      // ВАЖНО: клиентский фильтр длинных
       arr = arr.filter(v => this._isLong(v, type));
       return arr[0] || null;
     } catch {
@@ -215,6 +265,16 @@ export class YTProProvider {
       if (!arr.length) arr = await this.searchManyAny(q, limit, type);
       return arr.slice(0, Math.max(1, Math.min(50, limit)));
     } catch { return []; }
+  }
+
+  async searchManyAny(q, limit=CARDS_MAX, type="movie") {
+    try {
+      let arr = await this.serverSearch(q, { type, longOnly: false, limit: limit*3 });
+      if (!arr.length) arr = await this.ytSearch(q, { longOnly: false, limit: limit*3 });
+      return arr.slice(0, Math.max(1, Math.min(50, limit)));
+    } catch {
+      return [];
+    }
   }
 }
 

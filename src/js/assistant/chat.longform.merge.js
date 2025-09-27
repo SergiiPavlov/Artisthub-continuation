@@ -12,6 +12,9 @@ try{ window.__AS_CARDS_ACTIVE = true; }catch{}
 try{ if (typeof window!=='undefined' && (window.__PRO_CARDS_MAX==null)) window.__PRO_CARDS_MAX = 6; }catch{}
 const CARDS_MAX = (typeof window !== 'undefined' && window.__PRO_CARDS_MAX) ? Number(window.__PRO_CARDS_MAX) : 6;
 const LOG = (...a) => { try { (console.debug||console.log).call(console, "[chat.longform.merge]", ...a)} catch {} };
+const isDebug = () => { try { return !!window.__ASSIST_LONGFORM_DEBUG__; } catch { return false; } };
+const debugLog = (...args) => { if (isDebug()) LOG(...args); };
+
 
 const DEFAULT_SELECTORS = {
   feed:  '.assistant__feed, .assistant__log, .assistant__messages',
@@ -60,11 +63,40 @@ function hasPendingShort(){ return !!(window.chat && window.chat.pendingShort); 
 function setPendingShort(payload){ if (!window.chat) window.chat = {}; window.chat.pendingShort = payload; }
 function clearPendingShort(){ if (window.chat) window.chat.pendingShort = null; }
 
+const GENRE_RULES = [
+  { query: 'комедии', patterns: [/\bкомед/i, /comedy/i] },
+  { query: 'ужасы', patterns: [/\bужас/i, /horror/i] },
+  { query: 'боевики', patterns: [/\bбоевик/i, /action/i] },
+  { query: 'драмы', patterns: [/\bдрам/i, /drama/i] },
+  { query: 'фантастика', patterns: [/фантастик/i, /sci[- ]?fi/i, /science fiction/i] },
+  { query: 'фэнтези', patterns: [/фэнтези/i, /fantasy/i] },
+  { query: 'детективы', patterns: [/детектив/i, /detective/i, /mystery/i] },
+  { query: 'мелодрамы', patterns: [/мелодрам/i, /romance/i] },
+  { query: 'триллеры', patterns: [/триллер/i, /thriller/i] },
+  { query: 'приключения', patterns: [/приключен/i, /adventure/i] },
+  { query: 'военные фильмы', patterns: [/военн/i, /war/i] },
+  { query: 'исторические фильмы', patterns: [/историчес/i, /historical/i, /history movie/i] },
+  { query: 'биографии', patterns: [/биограф/i, /biography/i, /biopic/i] }
+];
+function detectGenreCommand(text){
+  const raw = String(text||'');
+  const low = raw.toLowerCase();
+  const cmdMatch = low.match(/(?:покажи|найди|подбери|включи|рекомендуй|show|find|play|recommend)\s+([^,;.!?]+)/i);
+  const scope = cmdMatch ? cmdMatch[1] : low;
+  for (const rule of GENRE_RULES) {
+    for (const re of rule.patterns) {
+      if (re.test(scope)) return rule;
+    }
+  }
+  return null;
+}
+
 /* ==== Парсинг ==== */
 function parseIntent(raw) {
   const text = String(raw||'').trim(); if (!text) return null;
   const low = text.toLowerCase();
-  const hasMovie = /(\bфильм(?:ы)?\b|\bкино\b|\bсериал(?:ы)?\b|\bmovie\b|\bseries\b)/i.test(low);
+  const genreHint = detectGenreCommand(text);
+  const hasMovie = /(\bфильм(?:ы)?\b|\bкино\b|\bсериал(?:ы)?\b|\bmovie\b|\bseries\b)/i.test(low) || !!genreHint;
   const hasAudio = /(?:\bаудио\s*книг(?:а|и|у)\b|\bкниг(?:а|у)\b|\baudiobook\b|\bаудио\b|\baudio\b)/i.test(low);
   if (!hasMovie && !hasAudio) return null;
   const needSuggest = /(вариант|подбери|предлож|посоветуй|порекомендуй|suggest|под\s+настроени[ея])/i.test(low);
@@ -72,12 +104,16 @@ function parseIntent(raw) {
   let actor = ""; const am = text.match(/(?:\bс\s+(?:актером|актрисой)?\s*|\bwith\s+)([a-zа-яёіїє][\w'\-]+(?:\s+[a-zа-яёіїє][\w'\-]+){0,2})/i); if (am) actor = am[1].trim();
   let mood = ""; let mm = text.match(/под\s+настроени[ея]\s+([a-zA-Zа-яА-ЯёЁіІїЇєЄ\- ]{3,})/i) || text.match(/настроени[ея]\s+([a-zа-яёіїє\- ]{3,})/i); if (mm) mood = mm[1].trim();
   let title = titleQuoted;
+  if (!title && genreHint) { title = genreHint.query; }
   if (!title) {
     const m2 = text.match(/(?:фильм(?:ы)?|кино|сериал(?:ы)?|movie|series|audiobook|аудио\s*книг(?:а|и|у)|книг(?:а|у)|\bаудио\b|\baudio\b)\s+([^,;.!?]+)$/i);
     if (m2) { let t = m2[1]; t = t.replace(/\s+с\s+.+$/i, "").replace(/\s+with\s+.+$/i, ""); title = t.trim(); }
   }
+  if (!title && genreHint) { title = genreHint.query; }
   const type = hasAudio ? 'audiobook' : 'movie';
-  return { type, title, mood, actor, needSuggest };
+  const intent = { type, title, mood, actor, needSuggest };
+  if (genreHint) intent.genre = genreHint.query;
+  return intent;
 }
 
 /* ==== Нормализация карточек + длительность ==== */
@@ -154,7 +190,12 @@ function normItem(it){
   const title = pickTitle(it);
   const channel = pickChannel(it);
   const duration = pickDuration(it);
-  return { id, title, channel, duration };
+  let durationSec = Number(it && (it.durationSec || it.duration_seconds || it.lengthSeconds || it.length_seconds) || 0);
+  if (!durationSec && typeof duration === 'string') {
+    if (/^PT/.test(duration)) durationSec = parseISOtoSec(duration);
+    else if (/\d+:\d{2}/.test(duration)) durationSec = parseClockToSec(duration);
+  }
+  return { id, title, channel, duration, durationSec };
 }
 function dedupeById(arr){
   const seen = new Set(); const out = [];
@@ -206,61 +247,106 @@ async function renderList({ items, type='movie', q='', kind='suggest', limit=CAR
   const feed = qs(getSelectors().feed); if (!feed) return;
   limit = Math.max(1, Math.min(CARDS_MAX, Number(limit)||CARDS_MAX));
 
-  // нормализация
-  try { items = (items||[]).map(normItem).filter(Boolean); } catch {}
-  items = dedupeById(items);
+  const rawItems = Array.isArray(items) ? items : [];
+  const debugData = isDebug() ? {
+    kind, type, limit,
+    counts: { raw: rawItems.length },
+    hidden: { invalid: [], short: [] }
+  } : null;
 
-  // ЖЁСТКИЙ фильтр коротышей по длительности (если длительность узнаваема)
-  const needSec = minSeconds(type);
-  const longs = items.filter(it => {
-    const iso = String(it.duration||'');
-    let sec = 0;
-    if (/^PT/.test(iso)) sec = parseISOtoSec(iso);
-    else if (/\d+:\d{2}/.test(iso)) sec = parseClockToSec(iso);
-    // если длительность неизвестна — временно пропускаем, ниже будет обогащение long-only
-    return sec === 0 ? true : (sec >= needSec);
-  });
-
-  // если что-то знаем — показываем только длинные/неизвестные
-  items = longs.length ? longs : items;
-
-  // обрезаем до лимита временно (после обогащения ещё раз обрежем)
-  items = items.slice(0, limit);
-
-  // если сервер дал мало или у всех неизвестна длительность — дотягиваем СТРОГО long-only через provider
-  if (items.length < Math.min(CARDS_MAX, limit)) {
-    try {
-      const qBuilt = provider.buildQuery({ type, title: q || '', mood:'', actor:'' });
-      const more = await provider.searchManyLong(qBuilt, limit, type); // OK, лишние аргументы игнорируются если не поддерживается
-      const moreFixed = (more||[]).map(normItem).filter(Boolean);
-      items = dedupeById(items.concat(moreFixed)).slice(0, limit);
-    } catch (e) { LOG('enrich fail', e); }
+  const normalized = [];
+  for (const raw of rawItems) {
+    let normed = null;
+    try { normed = normItem(raw); } catch (err) {
+      if (debugData) debugData.hidden.invalid.push({ reason: 'error', id: (raw && (raw.id || raw.videoId || raw.vid || raw.ytId)) || '' });
+    }
+    if (normed) normalized.push(normed);
+    else if (debugData) debugData.hidden.invalid.push({ reason: 'normalize', id: (raw && (raw.id || raw.videoId || raw.vid || raw.ytId)) || '' });
+  }
+  if (debugData) {
+    debugData.counts.normalized = normalized.length;
+    debugLog('renderList:normalize', { kind, type, limit, raw: debugData.counts.raw, normalized: normalized.length, dropped: debugData.hidden.invalid.length });
   }
 
-  // Fallback to ANY-length if still too few
+  let work = normalized;
+  const beforeDedupe = work.length;
+  work = dedupeById(work);
+  if (debugData) {
+    debugData.counts.dedupBefore = beforeDedupe;
+    debugData.counts.dedupAfter = work.length;
+    debugLog('renderList:dedupe', { kind, type, before: beforeDedupe, after: work.length, removed: beforeDedupe - work.length });
+  }
+
+  const needSec = minSeconds(type);
+  const filtered = [];
+  const shortHidden = [];
+  for (const it of work) {
+    let sec = Number(it.durationSec)||0;
+    if (!sec) {
+      const iso = String(it.duration||'');
+      if (/^PT/.test(iso)) sec = parseISOtoSec(iso);
+      else if (/\d+:\d{2}/.test(iso)) sec = parseClockToSec(iso);
+    }
+    if (sec && sec < needSec) {
+      shortHidden.push({ id: it.id, sec });
+      continue;
+    }
+    filtered.push(it);
+  }
+  if (filtered.length) work = filtered;
+  if (debugData) {
+    debugData.hidden.short = shortHidden;
+    debugData.counts.afterLong = work.length;
+    debugLog('renderList:long-filter', { kind, type, needSec, kept: work.length, short: shortHidden });
+  }
+
+  work = work.slice(0, limit);
+  const noteSearch = (mode, info) => { if (isDebug()) debugLog('renderList:search', Object.assign({ mode, kind, type, limit }, info)); };
+
+  if (work.length < Math.min(CARDS_MAX, limit)) {
+    try {
+      const qBuilt = provider.buildQuery({ type, title: q || '', mood:'', actor:'' });
+      noteSearch('long-enrich', { before: work.length, query: qBuilt });
+      const more = await provider.searchManyLong(qBuilt, limit, type);
+      const moreFixed = (more||[]).map(normItem).filter(Boolean);
+      if (isDebug()) debugLog('renderList:enrich-result', { mode: 'long-enrich', added: moreFixed.length });
+      work = dedupeById(work.concat(moreFixed)).slice(0, limit);
+    } catch (e) { LOG('enrich fail', e); if (isDebug()) debugLog('renderList:enrich-error', { mode: 'long-enrich', error: String(e?.message || e) }); }
+  }
+
   try {
-    if (!items.length || items.length < Math.min(4, limit)) {
+    if (!work.length || work.length < Math.min(4, limit)) {
       const anyQ = provider.buildQuery({ type, title: q || '', mood:'', actor:'' });
+      noteSearch('any-fallback', { before: work.length, query: anyQ });
       const any = await provider.searchManyAny(anyQ, limit, type);
       const anyFixed = (any||[]).map(normItem).filter(Boolean);
-      items = dedupeById(items.concat(anyFixed)).slice(0, limit);
+      if (isDebug()) debugLog('renderList:enrich-result', { mode: 'any-fallback', added: anyFixed.length });
+      work = dedupeById(work.concat(anyFixed)).slice(0, limit);
     }
-  } catch (e) { LOG('any-fallback fail', e); }
+  } catch (e) { LOG('any-fallback fail', e); if (isDebug()) debugLog('renderList:enrich-error', { mode: 'any-fallback', error: String(e?.message || e) }); }
 
-  // гидрация заголовков
   try {
-    const titled = items.filter(it => it.title && String(it.title).trim()).length;
-    if (items.length && titled < Math.ceil(items.length/2)) {
-      items = await ensureTitles(items, 900);
+    const titled = work.filter(it => it.title && String(it.title).trim()).length;
+    if (work.length && titled < Math.ceil(work.length/2)) {
+      work = await ensureTitles(work, 900);
+      if (isDebug()) debugLog('renderList:titles', { kind, type, updated: true, beforeTitled: titled });
+    } else if (isDebug()) {
+      debugLog('renderList:titles', { kind, type, updated: false, titled });
     }
-  } catch {}
+  } catch (err) { if (isDebug()) debugLog('renderList:titles-error', { kind, type, error: String(err?.message || err) }); }
 
-  const sig = sigFromItems(items);
+  const itemsFinal = work;
+  const sig = sigFromItems(itemsFinal);
   const wrap = document.createElement('div');
   wrap.className = 'as-cards';
   try { wrap.dataset.kind = kind; wrap.dataset.sig = sig; } catch(_){}
 
-  if (!items.length) {
+  if (debugData) {
+    debugData.counts.final = itemsFinal.length;
+    debugLog('renderList:final', { kind, type, limit, final: itemsFinal.length, counts: debugData.counts, hidden: debugData.hidden });
+  }
+
+  if (!itemsFinal.length) {
     const msg = document.createElement('div'); msg.className = 'as-cards__empty';
     const yurl = provider.buildYouTubeSearchURL(q, type);
     msg.innerHTML = type === 'audiobook'
@@ -273,11 +359,12 @@ async function renderList({ items, type='movie', q='', kind='suggest', limit=CAR
     return;
   }
 
-  for (let idx=0; idx<items.length; idx++){
-    const it = items[idx];
+  for (let idx=0; idx<itemsFinal.length; idx++){
+    const it = itemsFinal[idx];
     const card = document.createElement('div'); card.className = 'as-card';
     try { card.setAttribute('data-id', String(it.id)); } catch{}
-    const dur = fmtDurationAny(it.duration);
+    const durSource = (it.duration && String(it.duration).trim()) ? it.duration : it.durationSec;
+    const dur = fmtDurationAny(durSource);
     let titleText = String(it.title||'').replace(/\bundefined\b/gi,'').replace(/\s+/g,' ').trim(); if (!titleText) titleText = 'Без названия';
     const ch = String(it.channel||'').trim();
 
@@ -305,15 +392,14 @@ async function renderList({ items, type='movie', q='', kind='suggest', limit=CAR
 
   feed.appendChild(wrap); feed.scrollTop = feed.scrollHeight;
 
-  // поздняя гидрация «Без названия»
   (async () => {
     try {
-      const need = items.filter(it => it && it.id && !(it.title && String(it.title).trim()));
+      const need = itemsFinal.filter(it => it && it.id && !(it.title && String(it.title).trim()));
       if (!need.length) { hardDedupeCards(); return; }
       for (const it of need) {
         const t = await fetchTitleByOEmbed(it.id);
         if (!t) continue;
-        const safeId = (window.CSS && CSS.escape) ? CSS.escape(it.id) : it.id.replace(/"/g,'\\"');
+        const safeId = (window.CSS && CSS.escape) ? CSS.escape(it.id) : it.id.replace(/"/g,'\"');
         const node = wrap.querySelector(`.as-card[data-id="${safeId}"] .as-card__title`);
         if (node && (node.textContent||'').trim() === 'Без названия') node.textContent = t;
       }
@@ -323,7 +409,6 @@ async function renderList({ items, type='movie', q='', kind='suggest', limit=CAR
 
   hardDedupeCards();
 }
-
 /* ==== слушаем результат longform ==== */
 window.addEventListener('assistant:pro.suggest.result', async (e) => {
   try {
@@ -407,6 +492,7 @@ let _lastHandled = { text: "", ts: 0 };
       try { addMsg("user", esc(text)); } catch {}
       const intent = parseIntent(text);
       if (intent) {
+        if (isDebug()) debugLog('intent:path', { path: 'voice', text, intent });
         const now = Date.now();
         if (text === _lastHandled.text && (now - _lastHandled.ts) < 2000) { LOG("PAQ intercept: duplicate, skipping", text); return { handledByPro: true }; }
         _lastHandled = { text, ts: now };
@@ -464,6 +550,7 @@ let _lastHandled = { text: "", ts: 0 };
 let bound = false;
 async function handleSubmitText(v) {
   const intent = parseIntent(v); if (!intent) return false;
+  if (isDebug()) debugLog('intent:path', { path: 'ui', text: v, intent });
   addMsg('user', esc(v));
   const detail = { type:intent.type, title:intent.title, mood:intent.mood, actor:intent.actor, limit: CARDS_MAX };
   if (intent.needSuggest || !intent.title || intent.type==='movie') { window.dispatchEvent(new CustomEvent('assistant:pro.suggest', { detail })); addMsg('note','Подбираю варианты…'); speak('Подбираю варианты'); planSuggestWatchdog(detail); }
