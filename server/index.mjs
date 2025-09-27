@@ -550,6 +550,7 @@ app.post('/api/yt/search', async (req, res) => {
         try {
           const extra = await searchIdsFallback(q, { max: filterLimit, timeoutMs: 15000 });
           if (extra.length) fallbackDelivered = true;
+          fallbackMeta = extra?.meta || fallbackMeta;
           for (const id of extra) candidateSet.add(id);
         } catch (e) {
           console.warn('[yt.search] fallback failed', e?.message || e);
@@ -580,10 +581,13 @@ app.post('/api/yt/search', async (req, res) => {
     }
     out = out.slice(0, max);
 
-    return res.json({ ids: out, q, took: Date.now() - t0, cached: !!cached, excluded: exclude.length, fallback: fallbackUsed || forceFallback, fallbackDelivered });
+    const strategy = (fallbackUsed || forceFallback) ? 'fallback' : 'primary';
+      const candidatesTotal = fallbackMeta?.candidatesTotal ?? (strategy === 'primary' ? out.length : 0);
+      const titleMatched = !!(fallbackMeta && fallbackMeta.titleMatched);
+      return res.json({ ids: out, q, took: Date.now() - t0, cached: !!cached, excluded: exclude.length, fallback: fallbackUsed || forceFallback, fallbackDelivered, strategy, candidatesTotal, titleMatched });
   } catch (e) {
     console.error('[yt.search] error', e);
-    return res.status(500).json({ ids: [], error: 'server_error', took: Date.now() - t0 });
+    return res.status(500).json({ ids: [], error: 'server_error', took: Date.now() - t0, strategy: (fallbackUsed||forceFallback)?'fallback':'primary', candidatesTotal: 0, titleMatched: false });
   }
 });
 /* ---------------- Микс-сиды (рандом) ---------------- */
