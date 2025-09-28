@@ -275,15 +275,7 @@ export function createMiniPlayer() {
 
   let autoplayTimer = null;
   // Sleep timer: pause after N minutes based on deadline checked in startTimer()
-  let __sleepDeadline = 0;
-  function setSleepMinutes(mins) {
-    const m = Math.max(1, Math.round(Number(mins) || 0));
-    __sleepDeadline = Date.now() + m * 60000;
-  }
-  function clearSleep() { __sleepDeadline = 0; }
-
-
-  const DOCK_KEY = "amPlayerPos";
+const DOCK_KEY = "amPlayerPos";
   let dockDrag = null;
 
   const BUBBLE_KEY = "amBubblePos2";
@@ -312,18 +304,16 @@ export function createMiniPlayer() {
       document.body.appendChild(bubble);
 
       bubble.addEventListener("click", (e) => {
-        if (recentBubbleDrag) {
-          recentBubbleDrag = false;
-          e.preventDefault();
-          e.stopPropagation();
-          return;
-        
-    syncBubbleNow();
-}
-        uiMin(false);
-      });
-
-      bubble.addEventListener("pointerdown", (e) => {
+  if (recentBubbleDrag) {
+    recentBubbleDrag = false;
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
+  try { syncBubbleNow(); } catch {}
+  uiMin(false);
+});
+bubble.addEventListener("pointerdown", (e) => {
         bubbleDragging = false;
         recentBubbleDrag = false;
         try { bubble.setPointerCapture(e.pointerId); } catch {}
@@ -464,9 +454,7 @@ function clampBubbleToViewport(margin = 8) {
     
       // resume.js hook: notify current progress for persistence
       emit("progress", { current: cur, duration });
-      if (__sleepDeadline && Date.now() >= __sleepDeadline) { __sleepDeadline = 0; try { yt?.pauseVideo?.(); } catch {} }
-
-    }, 250);
+}, 250);
   }
   function clearWatchdog() { if (watchdogId) { clearTimeout(watchdogId); watchdogId = null; } }
   function clearSearchWatch() { if (searchWatchdogId) { clearTimeout(searchWatchdogId); searchWatchdogId = null; } }
@@ -1153,8 +1141,6 @@ const Player = {
   close:      () => get().close(),
   playSearch: (q) => get().playSearch(q),
   seekTo:     (s) => get().seekTo(s),
-  sleep:      (m) => setSleepMinutes(m),
-  clearSleep: () => clearSleep(),
 };
 
 export default Player;
