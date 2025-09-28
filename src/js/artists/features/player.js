@@ -163,6 +163,30 @@ export function createMiniPlayer() {
   const dragzone = dock.querySelector(".am-player__dragzone");
   const aYTlink  = dock.querySelector(".am-player__ytlink");
   const btnFS    = dock.querySelector(".am-player__fs");
+  /* --- wake overlay: catches gestures over iframe when UI is hidden --- */
+  const frame = dock.querySelector(".am-player__frame");
+  // Fallback listeners to wake UI even if events hit the iframe
+  const __uiWakeFallback__ = () => { try { __uiPoke?.(); } catch {} };
+  (frame || dock)?.addEventListener('mousemove', __uiWakeFallback__, { passive: true });
+  document.addEventListener('keydown', __uiWakeFallback__);
+
+  const wake  = document.createElement('div');
+  wake.className = 'am-player__wake';
+  Object.assign(wake.style, {
+    position: 'absolute',
+    inset: '0',
+    background: 'transparent',
+    pointerEvents: 'none',   // default: off
+    zIndex: '3'              // above iframe, below buttons
+  });
+  if (frame && getComputedStyle(frame).position === 'static') {
+    frame.style.position = 'relative';
+  }
+  frame?.appendChild(wake);
+  ['pointermove','pointerdown','touchstart','wheel','click'].forEach(ev => {
+    wake.addEventListener(ev, () => { try { __uiPoke?.(); } catch {} }, { passive: true });
+  });
+
   /* ---------- Auto-hide controls (smooth) ---------- */
   const bar      = dock.querySelector(".am-player__bar");
   function __ensureTrans(el) { if (el && !el.style.transition) el.style.transition = 'opacity .25s ease, transform .25s ease'; }
@@ -174,6 +198,8 @@ export function createMiniPlayer() {
   function __uiControlsHidden(on) {
     const hide = !!on;
     dock.classList.toggle("am-player--ui-hidden", hide);
+    try { if (typeof wake !== "undefined" && wake) wake.style.pointerEvents = hide ? "auto" : "none"; } catch {}
+
     const setHide = (el, dy='8px') => {
       if (!el) return;
       if (hide) { el.style.opacity = '0'; el.style.transform = `translateY(${dy})`; el.style.pointerEvents = 'none'; }
@@ -283,7 +309,9 @@ export function createMiniPlayer() {
           e.preventDefault();
           e.stopPropagation();
           return;
-        }
+        
+    syncBubbleNow();
+}
         uiMin(false);
       });
 
@@ -331,7 +359,16 @@ export function createMiniPlayer() {
     const amp = 1.02 + (Math.max(0, Math.min(100, v)) / 100) * 0.08;
     bubble.style.setProperty("--amp", amp.toFixed(3));
   }
-  function clampBubbleToViewport(margin = 8) {
+  
+  function syncBubbleNow() {
+    try {
+      const st = yt?.getPlayerState?.();
+      const playing = (st === YT.PlayerState.PLAYING);
+      setBubblePulse(playing);
+    } catch {}
+    try { setBubbleAmp(volVal); } catch {}
+  }
+function clampBubbleToViewport(margin = 8) {
     if (!bubble || bubble.style.display === "none") return;
     const w = window.innerWidth, h = window.innerHeight;
     const r = bubble.getBoundingClientRect();
@@ -392,7 +429,7 @@ export function createMiniPlayer() {
   }
   function uiMin(on) {
     dock.classList.toggle("am-player--min", !!on);
-    if (on) showBubble(true);
+    if (on) { showBubble(true); try { syncBubbleNow(); } catch {} }
     else hideBubble();
     emit(on ? "minimized" : "expanded", {});
   }
@@ -853,8 +890,14 @@ armStuckGuard();
     searchMode = false;
     lastQuery = ''; variantIndex = 0;
     queue = [id]; qi = 0;
-    uiMin(false); uiShow(true); restoreDockPos();
-    await playByIndex(0, { reveal: true });
+    const keepMin = dock.classList.contains('am-player--min');
+if (keepMin) {
+  if (!dock.classList.contains('am-player--active')) uiShow(true);
+} else {
+  uiMin(false); uiShow(true); restoreDockPos();
+}
+await playByIndex(0, { reveal: !keepMin });
+
   }
 
   async function openQueue(list, opts = {}) {
@@ -866,8 +909,14 @@ armStuckGuard();
     const arr = opts.shuffle ? shuffleArr(ids) : ids.slice();
     queue = arr;
     const start = clamp(Number(opts.startIndex ?? 0) || 0, 0, queue.length - 1);
-    uiMin(false); uiShow(true); restoreDockPos();
-    await playByIndex(start, { reveal: true });
+    const keepMin = dock.classList.contains('am-player--min');
+if (keepMin) {
+  if (!dock.classList.contains('am-player--active')) uiShow(true);
+} else {
+  uiMin(false); uiShow(true); restoreDockPos();
+}
+await playByIndex(start, { reveal: !keepMin });
+
   }
 
   async function smartNextFromCurrent() {
@@ -984,7 +1033,13 @@ armStuckGuard();
   async function playSearch(query) {
     const q = String(query || "").trim();
     if (!q) return;
-    uiMin(false); uiShow(true); restoreDockPos();
+    const keepMin = dock.classList.contains('am-player--min');
+if (keepMin) {
+  if (!dock.classList.contains('am-player--active')) uiShow(true);
+} else {
+  uiMin(false); uiShow(true); restoreDockPos();
+}
+
 
     lastQuery = q; variantIndex = 0; sameIdPlays = 0; lastVidId = null;
 
