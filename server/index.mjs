@@ -4,7 +4,7 @@ import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { registerTTS } from './tts.mjs';
-import { searchIdsFallback, filterEmbeddable } from './search-fallback.mjs';
+import { searchIdsFallback, filterEmbeddable, isMovieQuery } from './search-fallback.mjs';
 
 // ▼ NEW: longform YouTube search route (separate endpoint /api/yt/search-long)
 import registerLongSearch from './patches/yt-longsearch.mjs';
@@ -331,8 +331,8 @@ function inferActionsFromUser(text = '') {
     ['rnb', 'rnb|r&b|соул|soul'],
     ['latin', 'latin|латино|сальса|бачата|реггетон'],
     ['reggae', 'reggae|регги|ска|ska'],
-    ['k-pop', 'k[- ]?pop|кей[ -]?поп'],
-    ['j-pop', 'j[- ]?pop|джей[ -]?поп'],
+    ['k-pop', 'k-pop|кей[ -]?поп'],
+    ['j-pop', 'j-pop|джей[ -]?поп'],
     ['soundtrack', 'саундтрек|ost|original soundtrack'],
   ];
   for (const [canon, reStr] of gsyn) {
@@ -510,8 +510,14 @@ app.get('/api/yt/cache/stats', (_req, res) => {
 const FILTER_INPUT_MULTIPLIER = 3;
 const FILTER_INPUT_CAP = 150;
 
+// 🔧 Жёсткие пороги «кино»-режима в коде (без ENV)
+const MOVIE_SHORT_DROP_SEC = 20 * 60;   // < 20m считаем коротышом — убираем
+const MOVIE_LONG_THRESHOLD_SEC = 60 * 60; // ≥ 60m считаем «длинным»
+
 app.post('/api/yt/search', async (req, res) => {
   const t0 = Date.now();
+  let fallbackUsed = false;           // объявляем выше, чтобы catch мог их видеть
+  let fallbackDelivered = false;
   try {
     const q = String(req.body?.q || '').trim();
     const max = Math.max(1, Math.min(50, Number(req.body?.max || 25)));
@@ -522,13 +528,14 @@ app.post('/api/yt/search', async (req, res) => {
     const forceFallback = req.body?.forceFallback === true || req.body?.forceFallback === '1';
     if (!q) return res.status(400).json({ ids: [], error: 'no_query' });
 
+    const movieMode = isMovieQuery(q);
+
     const key = cacheKey(q, max);
     const cachedRaw = forceFallback ? null : cacheGet(key);
+    const cachedMeta = cachedRaw?.meta || null;
     let ids = cachedRaw ? [...cachedRaw] : null;
     const cached = !!ids;
-    let fallbackUsed = false;
-    let fallbackDelivered = false;
-    let fallbackMeta = null;
+    let fallbackMeta = cachedMeta;
 
     if (!ids) {
       const candidateSet = new Set();
@@ -566,6 +573,42 @@ app.post('/api/yt/search', async (req, res) => {
         console.warn('[yt.search] embeddable filter failed', e?.message || e);
         ids = candidates.slice(0, max);
       }
+
+      // ⭐ Movie-гейт после embeddable: выброс коротышей и long-first (если это «фильм»)
+      if (movieMode && Array.isArray(ids) && ids.length) {
+        const hints = (fallbackMeta && typeof fallbackMeta.durationById === 'object')
+          ? fallbackMeta.durationById
+          : null;
+        if (hints) {
+          const long = [];
+          const unknown = [];
+          const rest = [];
+          for (const id of ids) {
+            const raw = hints[id];
+            let duration = null;
+            if (typeof raw === 'number') {
+              duration = Number.isFinite(raw) ? raw : null;
+            } else if (typeof raw === 'string' && raw.trim()) {
+              const n = Number(raw.trim());
+              duration = Number.isFinite(n) ? n : null;
+            }
+            // убираем явные коротыши
+            if (duration != null && duration > 0 && duration < MOVIE_SHORT_DROP_SEC) continue;
+
+            if (duration != null && duration >= MOVIE_LONG_THRESHOLD_SEC) long.push(id);
+            else if (duration == null) unknown.push(id);
+            else rest.push(id);
+          }
+          const merged = [...long, ...unknown, ...rest];
+          if (merged.length) ids = merged.slice(0, max);
+        }
+      }
+
+      // прокидываем meta внутрь массива ids (для кеша и последующих ответов)
+      if (fallbackMeta) {
+        try { Object.defineProperty(ids, 'meta', { value: fallbackMeta, enumerable: false }); } catch {}
+      }
+
       if (ids.length >= 4 && !forceFallback) cacheSet(key, ids);
       if (!ids.length && candidateSet.size) {
         // если фильтр всё равно не смог — вернём необработанные карточки (fallback/primary)
@@ -583,12 +626,31 @@ app.post('/api/yt/search', async (req, res) => {
     out = out.slice(0, max);
 
     const strategy = (fallbackUsed || forceFallback) ? 'fallback' : 'primary';
-      const candidatesTotal = fallbackMeta?.candidatesTotal ?? (strategy === 'primary' ? out.length : 0);
-      const titleMatched = !!(fallbackMeta && fallbackMeta.titleMatched);
-      return res.json({ ids: out, q, took: Date.now() - t0, cached: !!cached, excluded: exclude.length, fallback: fallbackUsed || forceFallback, fallbackDelivered, strategy, candidatesTotal, titleMatched });
+    const candidatesTotal = fallbackMeta?.candidatesTotal ?? (strategy === 'primary' ? out.length : 0);
+    const titleMatched = !!(fallbackMeta && fallbackMeta.titleMatched);
+
+    return res.json({
+      ids: out,
+      q,
+      took: Date.now() - t0,
+      cached: !!cached,
+      excluded: exclude.length,
+      fallback: fallbackUsed || forceFallback,
+      fallbackDelivered,
+      strategy,
+      candidatesTotal,
+      titleMatched,
+    });
   } catch (e) {
     console.error('[yt.search] error', e);
-    return res.status(500).json({ ids: [], error: 'server_error', took: Date.now() - t0, strategy: (fallbackUsed||forceFallback)?'fallback':'primary', candidatesTotal: 0, titleMatched: false });
+    return res.status(500).json({
+      ids: [],
+      error: 'server_error',
+      took: Date.now() - t0,
+      strategy: (fallbackUsed || (req?.body?.forceFallback === true || req?.body?.forceFallback === '1')) ? 'fallback' : 'primary',
+      candidatesTotal: 0,
+      titleMatched: false
+    });
   }
 });
 /* ---------------- Микс-сиды (рандом) ---------------- */
@@ -696,7 +758,7 @@ app.post('/api/chat', async (req, res) => {
     if (!Array.isArray(data.actions) || data.actions.length === 0) {
       const last = lastChanceActions(userText);
       if (last.length) {
-        data = { reply: replyForActions(last) || 'Играю.', explain: data.explain || '', actions: last };
+        data = { reply: last.length ? replyForActions(last) : (data.reply || 'Готово.'), explain: data.explain || '', actions: last };
         if (DEBUG_INTENT) console.log('[chat:fallback:lastchance]', last);
       }
     }
@@ -705,7 +767,6 @@ app.post('/api/chat', async (req, res) => {
     try {
       const isFree = (cfg?.name === 'free');
 
-      
       // плюс фильмы/сериалы/мультфильмы и англ. варианты.
       const PRO_ONLY_RE = /\b(аудио\s*книг\w*|аудиокниг\w*|книг\w*|книжк\w*|audiobook|audio\s*book|фильм\w*|кино|movie|film|сериал\w*|мультфильм\w*|cartoon)\b/iu;
 
@@ -821,4 +882,3 @@ app.listen(PORT, () => {
     `Using PRO(base=${LLM.pro.base}, model=${LLM.pro.model}, key=${LLM.pro.key ? 'set' : 'no'}) | FREE(base=${LLM.free.base}, model=${LLM.free.model})  (${VERSION})`
   );
 });
-
