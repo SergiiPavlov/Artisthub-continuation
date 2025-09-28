@@ -701,6 +701,37 @@ app.post('/api/chat', async (req, res) => {
       }
     }
 
+    // --- PRO gate: фильмы/аудиокниги доступны только в Pro ---
+    try {
+      const isFree = (cfg?.name === 'free');
+
+      
+      // плюс фильмы/сериалы/мультфильмы и англ. варианты.
+      const PRO_ONLY_RE = /\b(аудио\s*книг\w*|аудиокниг\w*|книг\w*|книжк\w*|audiobook|audio\s*book|фильм\w*|кино|movie|film|сериал\w*|мультфильм\w*|cartoon)\b/iu;
+
+      const textN = normalizeAggressive(userText);
+      const acts = Array.isArray(data.actions) ? data.actions : [];
+      const mentionsInActs = acts.some(a => {
+        const payload = normalizeAggressive(
+          [a?.query, a?.like, a?.genre, a?.mood].filter(Boolean).join(' ')
+        );
+        return (a?.type === 'play' || a?.type === 'recommend') && PRO_ONLY_RE.test(payload);
+      });
+
+      if (isFree && (PRO_ONLY_RE.test(textN) || mentionsInActs)) {
+        const msg =
+          langHint === 'ru'
+            ? 'Сейчас бесплатный музыкальный режим: фильмы и аудиокниги недоступны. Переключись на Pro — там можно смотреть и слушать.'
+            : langHint === 'uk'
+            ? 'Зараз безкоштовний музичний режим: фільми та аудіокниги недоступні. Перемкнись на Pro — там це можна.'
+            : 'You are in the free music mode. Movies and audiobooks are available in Pro. Switch to Pro to play them.';
+        return res.json({ reply: msg, actions: [], explain: '', provider: cfg.name });
+      }
+    } catch (e) {
+      if (DEBUG_INTENT) console.warn('[pro-gate] failed', e);
+    }
+    // --- /PRO gate ---
+
     // ⭐ 4) НОВОЕ: если действий так и нет — «чистый чат» как финальный запасной путь
     if (!Array.isArray(data.actions) || data.actions.length === 0) {
       const plain = await askLLMPlain(

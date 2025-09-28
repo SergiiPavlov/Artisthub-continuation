@@ -1,11 +1,18 @@
-// server/search-fallback.mjs — v1.3.3 (2025-09-27)
+// server/search-fallback.mjs — v1.3.6 (2025-09-28)
 // YouTube fallback (Piped → HTML) + oEmbed «встраиваемость»
-// Мягкий title-aware ранжировщик: ядро запроса, Dice, год, письменность, длительность, 1-pass expansion
-// Улучшено: кириллица↔транслит в скоринге, длительность из HTML, мягкий штраф за unknown duration
-// Экспортирует: searchIdsFallback, filterEmbeddable
+// Title-aware ranking: query core, Dice, year, script, duration, 1-pass expansion
+// HARD defaults in code (no ENV): hide shorts, long-first, strict unknown policy for movie-like queries.
+// Exports: searchIdsFallback, filterEmbeddable
 //
-// Публичный контракт ответа НЕ меняется. Диагностика — только невидимой метой массива ids.
+// Public API/contract unchanged. Any diagnostics attached as non-enumerable meta on returned ids array.
 
+// ===== Hard limits (no ENV) =====
+const AUTOPLAY_MIN_SEC = 3600;   // ≥60m considered "long" for autoplay
+const SHORT_DROP_SEC   = 1200;   // <20m considered "short"
+const HIDE_SHORTS      = true;   // fully hide shorts in fallback for movie-like queries
+const STRICT_UNKNOWN   = true;   // unknown duration allowed on top only if strong name match
+
+// ===== Core constants =====
 const DEFAULT_MAX = 25;
 const VALID_ID = /^[A-Za-z0-9_-]{11}$/;
 const FALLBACK_MULTIPLIER = 3;
@@ -14,15 +21,15 @@ const FALLBACK_HARD_CAP = 150;
 const CYRILLIC_RE = /[\u0400-\u04FF]/;
 const LATIN_RE = /[A-Za-z]/;
 
-const MOVIE_DURATION_MIN = 45 * 60;      // 45m — «длиннее плейлиста»
-const MOVIE_STRONG_DURATION = 75 * 60;   // 75m — уверенный полный метр
-const MOVIE_MEDIUM_DURATION = 60 * 60;   // 60..74m — ок
-const SHORT_STRONG_THRESHOLD = 25 * 60;  // <25m — уверенный «коротыш» для movie-like
+const MOVIE_DURATION_MIN = 45 * 60;      // generic "long-ish"
+const MOVIE_STRONG_DURATION = 75 * 60;   // confident feature
+const MOVIE_MEDIUM_DURATION = 60 * 60;
+const SHORT_STRONG_THRESHOLD = 25 * 60;
 
-const SCORE_EXPANSION_THRESHOLD = 4;     // при слабом топе — одна попытка расширения
-const SCORE_PENALTY_CAP = 3;             // кап штрафов за маркеры шума
+const SCORE_EXPANSION_THRESHOLD = 4;     // if weak top — single expansion pass
+const SCORE_PENALTY_CAP = 3;             // cap for negative markers
 
-// Стоп-слова, которые убираем из запроса, чтобы выделить «ядро»
+// Stop patterns to extract the query core
 const CORE_STOP_PATTERNS = [
   /\bполный фильм\b/g,
   /\bполныйфильм\b/g,
@@ -35,16 +42,17 @@ const CORE_STOP_PATTERNS = [
   /\bкино\b/g,
 ];
 
-// Мягкие маркеры «шума» в тайтлах — это не бан, а маленькие минусы (с капом)
+// Soft noise markers in titles (capped penalties)
 const TITLE_NEGATIVE_MARKERS = [
-  'trailer', 'тизер', 'серия', 'сезон', 'short', 'shorts', 'клип', 'clips', 'clip',
-  'ost', 'amv', 'обзор', 'моменты', 'review', 'episode', 'teaser', 'preview',
-  'лучшие моменты', 'best moments'
+  'trailer','тизер','серия','эпизод','часть','сезон','short','shorts','clip','clips','клип',
+  'ost','amv','обзор','моменты','review','episode','teaser','preview','лучшие моменты','best moments',
+  's0','e0' // crude nudge against s01e01 patterns (soft)
 ];
 
-// Мягкие положительные маркеры «это фильм»
-const TITLE_POSITIVE_MARKERS = ['полный фильм', 'полныйфильм', 'фильм', 'кино', 'full movie', 'movie', 'film'];
+// Soft positive markers "this is a movie"
+const TITLE_POSITIVE_MARKERS = ['полный фильм','полныйфильм','фильм','кино','full movie','movie','film'];
 
+// ===== Normalization & translit =====
 function normalizeTitleText(input = '') {
   let text = String(input || '');
   try { text = text.normalize('NFC'); } catch {}
@@ -55,7 +63,7 @@ function normalizeTitleText(input = '') {
   return text.toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
-// Простая транслитерация RU→LAT для сопоставления
+// Simple RU→LAT translit for matching
 const RU2LAT = {
   'а':'a','б':'b','в':'v','г':'g','д':'d','е':'e','ё':'e','ж':'zh','з':'z','и':'i','й':'i',
   'к':'k','л':'l','м':'m','н':'n','о':'o','п':'p','р':'r','с':'s','т':'t','у':'u','ф':'f',
@@ -82,11 +90,12 @@ function isMovieQuery(q = '') {
   const t = normalizeTitleText(q);
   if (!t) return false;
   if (t.includes('полный фильм') || t.includes('full movie')) return true;
-  if (/(19|20)\d{2}/.test(q)) return true; // год → часто про кино
+  if (/(19|20)\d{2}/.test(q)) return true; // year often signals movie
   if (t.includes('фильм') || t.includes('кино') || t.includes('movie') || t.includes('film')) return true;
   return false;
 }
 
+// ===== Duration parsing =====
 function parseDurationSeconds(raw) {
   if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) return raw;
   if (typeof raw === 'string') {
@@ -99,26 +108,26 @@ function parseDurationSeconds(raw) {
   return null;
 }
 
-// Разбор длительности в русских форматах + clock-строки (из «вчерашней» версии)
+// Russian/clock formats for HTML
 function parseClockToSec(raw = '') {
   const s = String(raw).trim().toLowerCase().replace(/\s+/g, ' ');
-  // hh:mm(:ss) или mm:ss
+  // hh:mm(:ss) or mm:ss
   if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(s)) {
     const parts = s.split(':').map((n) => parseInt(n, 10));
     if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
     if (parts.length === 2) return parts[0] * 60 + parts[1];
   }
-  // русские единицы: ч, м, с
+  // Russian units
   let h = 0, m = 0, sec = 0;
   const H = s.match(/(\d+)\s*ч/);      if (H) h = parseInt(H[1], 10);
   const M = s.match(/(\d+)\s*м(?!с)/);  if (M) m = parseInt(M[1], 10);
-  const S = s.match(/(\d+)\s*с/);      if (S) sec = parseInt(S[1], 10);
+  const S = s.match(/(\d+)\s*с/);       if (S) sec = parseInt(S[1], 10);
   if (h || m || sec) return h * 3600 + m * 60 + sec;
-  // просто число → секунды
   const num = Number(s);
   return Number.isFinite(num) ? num : null;
 }
 
+// ===== Utils =====
 function uniqById(items) {
   const out = [];
   const seen = new Set();
@@ -139,13 +148,14 @@ function uniqById(items) {
   return out;
 }
 
-// Быстрая проверка «встраиваемости» через oEmbed
+// ===== Embeddability =====
 async function isEmbeddable(id, signal) {
   const u = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`;
   const r = await fetch(u, { signal }).catch(() => null);
   return !!(r && r.ok);
 }
 
+// ===== Sources =====
 async function pipedSearch(q, max, signal) {
   const base = (process.env.PIPED_INSTANCE || '').replace(/\/+$/, '') || 'https://piped.video';
   const regionHint = (process.env.PIPED_REGION_HINT || 'RU').trim();
@@ -161,9 +171,7 @@ async function pipedSearch(q, max, signal) {
       : (typeof it?.url === 'string' && (it.url.match(/v=([A-Za-z0-9_-]{11})/)?.[1] || ''));
     if (vid && VALID_ID.test(vid)) {
       let durationSec = parseDurationSeconds(it?.durationSeconds ?? it?.duration ?? null);
-      if (durationSec == null) {
-        durationSec = parseClockToSec(it?.durationText || it?.lengthText || '');
-      }
+      if (durationSec == null) durationSec = parseClockToSec(it?.durationText || it?.lengthText || '');
       out.push({
         id: vid,
         duration: Number.isFinite(durationSec) ? durationSec : null,
@@ -175,36 +183,36 @@ async function pipedSearch(q, max, signal) {
   return uniqById(out);
 }
 
+function decodeMaybeJson(str) {
+  if (typeof str !== 'string') return null;
+  try { return JSON.parse('"' + str.replace(/"/g, '\\"') + '"'); }
+  catch { return str; }
+}
+
 async function htmlSearch(q, max, signal) {
   const u = `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`;
   const r = await fetch(u, { headers: { 'Accept-Language': 'ru,en;q=0.8,uk;q=0.7' }, signal }).catch(() => null);
   if (!r || !r.ok) return [];
   const html = await r.text();
   const out = [];
-  // videoId в JSON (рядом тянем title и lengthText)
+  // videoId in JSON — pull title and lengthText nearby
   const reJSON = /"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"/g;
   let m;
   while ((m = reJSON.exec(html)) && out.length < max) {
     const id = m[1];
-    if (VALID_ID.test(id)) {
-      let title = null;
-      let dur = null;
-      const around = html.slice(Math.max(0, m.index - 400), Math.min(html.length, m.index + 400));
-      const t1 = around.match(/"title"\s*:\s*\{\s*"runs"\s*:\s*\[\s*\{\s*"text"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
-      const l1 = around.match(/"lengthText"\s*:\s*\{\s*"simpleText"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
-      if (t1 && t1[1]) {
-        try { title = JSON.parse('"' + t1[1].replace(/"/g, '\\"') + '"'); } catch { title = t1[1]; }
-      }
-      if (l1 && l1[1]) {
-        try {
-          const s = JSON.parse('"' + l1[1].replace(/"/g, '\\"') + '"');
-          dur = parseClockToSec(s);
-        } catch { dur = parseClockToSec(l1[1]); }
-      }
-      out.push({ id, duration: Number.isFinite(dur) ? dur : null, title });
-    }
+    if (!VALID_ID.test(id)) continue;
+    let title = null;
+    let dur = null;
+    const around = html.slice(Math.max(0, m.index - 1000), Math.min(html.length, m.index + 1000));
+    const t1 = around.match(/"title"\s*:\s*\{\s*"runs"\s*:\s*\[\s*\{\s*"text"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
+    const l1 = around.match(/"lengthText"\s*:\s*\{\s*"simpleText"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
+    const l2 = around.match(/"lengthText"\s*:\s*\{\s*"runs"\s*:\s*\[\s*\{\s*"text"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/);
+    if (t1 && t1[1]) title = decodeMaybeJson(t1[1]);
+    const durRaw = l1?.[1] ?? l2?.[1] ?? null;
+    if (durRaw) dur = parseClockToSec(decodeMaybeJson(durRaw));
+    out.push({ id, duration: Number.isFinite(dur) ? dur : null, title });
   }
-  // запасной путь: ссылки (без тайтла)
+  // fallback: link scan (no title)
   if (out.length < max) {
     const reLink = /\/watch\?v=([A-Za-z0-9_-]{11})/g;
     let m2;
@@ -216,7 +224,7 @@ async function htmlSearch(q, max, signal) {
   return uniqById(out).slice(0, max);
 }
 
-// Параллельный фильтр «встраиваемости» с сохранением порядка
+// ===== Embeddable filter (order-preserving) =====
 export async function filterEmbeddable(ids, { max, timeoutMs = 15000, concurrency = 8 } = {}) {
   const limit = Number.isFinite(max) && max > 0 ? Math.floor(max) : ids.length;
   const acceptedIdx = [];
@@ -237,14 +245,12 @@ export async function filterEmbeddable(ids, { max, timeoutMs = 15000, concurrenc
     if (to) clearTimeout(to);
   }
   const ordered = acceptedIdx.sort((a, b) => a - b).map((idx) => ids[idx]);
-  return ordered.slice(0, limit);
-
   // ultra-safe: if nothing survived, keep original order to preserve cards
   if (!ordered.length) return ids.slice(0, limit);
+  return ordered.slice(0, limit);
 }
 
-
-// --------- Ранжирование: ядро запроса, Dice, год, письменность, длительность ---------
+// ===== Ranking helpers =====
 function extractQueryCore(normQ) {
   if (!normQ) return '';
   let core = normQ;
@@ -298,7 +304,7 @@ function hasScriptMismatch(queryNorm, titleNorm) {
   return false;
 }
 
-// ----------------- Основной фоллбэк-поиск с улучшенным ранжированием -----------------
+// ===== Main fallback search with stricter anti-short gating =====
 export async function searchIdsFallback(q, { max = DEFAULT_MAX, timeoutMs = 15000 } = {}) {
   const ctrl = new AbortController();
   const to = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -322,7 +328,7 @@ export async function searchIdsFallback(q, { max = DEFAULT_MAX, timeoutMs = 1500
     const queryYears = extractYears(normQ);
     const qVariants = makeVariants(queryCore || normQ);
 
-    let enriched = combined.map((item, idx) => {
+    const enriched = combined.map((item, idx) => {
       const duration = Number.isFinite(item?.duration) ? item.duration : null;
       const title = typeof item?.title === 'string' && item.title.trim() ? item.title.trim() : null;
       const normTitle = title ? normalizeTitleText(title) : null;
@@ -331,7 +337,6 @@ export async function searchIdsFallback(q, { max = DEFAULT_MAX, timeoutMs = 1500
 
     const longExists = enriched.some((e) => Number.isFinite(e.duration) && e.duration >= MOVIE_MEDIUM_DURATION);
 
-    // Мягкий ранжировщик (без жёстких фильтров)
     function scoreEntry(e) {
       const nt = e.normTitle || '';
       const ntVariants = makeVariants(nt);
@@ -339,14 +344,12 @@ export async function searchIdsFallback(q, { max = DEFAULT_MAX, timeoutMs = 1500
       let fuzzyScore = 0;
       let yearMatched = false;
       let shortPenaltyHits = 0;
+      let matchedCore = 0;
 
       if (nt) {
-        // Точное вхождение ядра — по любому варианту (RU/LAT)
         if (queryCore) {
           for (const v of ntVariants) { if (v.includes(queryCore)) { score += 3; break; } }
         }
-        // Покрытие токенов ядра — по любому варианту (RU/LAT)
-        let matchedCore = 0;
         for (const tok of coreTokens) {
           let ok = false;
           for (const v of ntVariants) { if (v.includes(tok)) { ok = true; break; } }
@@ -354,15 +357,12 @@ export async function searchIdsFallback(q, { max = DEFAULT_MAX, timeoutMs = 1500
         }
         score += matchedCore * 0.75;
         if (!coreTokens.length) {
-          // fallback-токены — чуточку слабее
           for (const tok of fallbackTokens) {
             let ok = false;
             for (const v of ntVariants) { if (v.includes(tok)) { ok = true; break; } }
             if (ok) score += 0.5;
           }
         }
-
-        // Dice по лучшей паре RU/LAT
         let best = 0;
         for (const v of ntVariants) for (const b of qVariants) {
           const d = diceCoefficient(v, b);
@@ -378,7 +378,7 @@ export async function searchIdsFallback(q, { max = DEFAULT_MAX, timeoutMs = 1500
         if (queryYears.size) {
           let match = false;
           for (const y of queryYears) if (titleYears.has(y)) { match = true; break; }
-          if (match) { score += 1; yearMatched = true; }
+          if (match) { score += 1.2; yearMatched = true; } // slightly stronger
           else if (titleYears.size) score -= 0.6;
         }
 
@@ -390,13 +390,11 @@ export async function searchIdsFallback(q, { max = DEFAULT_MAX, timeoutMs = 1500
           }
         }
 
-        // Если ядро есть (>=2 токена) и покрытие слабое — мягкий минус
         if (coreTokens.length >= 2) {
           const coverage = matchedCore / coreTokens.length;
           if (coverage < 0.5) score -= 0.6;
         }
 
-        // Штраф за «разную письменность» — только если RU/LAT-попаданий нет
         const anyCoreHit = (coreTokens.length ? matchedCore > 0 : true) || (fuzzyScore >= 0.6) || (queryCore && ntVariants.some(v => v.includes(queryCore)));
         if (!anyCoreHit && hasScriptMismatch(normQ, nt)) score -= 0.4;
       }
@@ -406,15 +404,14 @@ export async function searchIdsFallback(q, { max = DEFAULT_MAX, timeoutMs = 1500
           if (e.duration >= MOVIE_STRONG_DURATION) score += 1.5;
           else if (e.duration >= MOVIE_MEDIUM_DURATION) score += 0.6;
           else if (e.duration > 0 && e.duration < 15 * 60) {
-            score -= 1.8; // сильнее давим совсем короткие
+            score -= 1.8;
             shortPenaltyHits++;
-          } else if (e.duration > 0 && e.duration < SHORT_STRONG_THRESHOLD) {
+          } else if (e.duration > 0 && e.duration < SHORT_DROP_SEC) {
             score -= 1.2;
             shortPenaltyHits++;
           }
         } else if (longExists) {
-          // мягкий минус за неизвестную длительность, если в выдаче есть уверенно длинные
-          score -= 0.4;
+          score -= 0.4; // soft minus for unknown when long videos exist
         }
       } else if (Number.isFinite(e.duration) && e.duration >= MOVIE_DURATION_MIN) {
         score += 0.3;
@@ -424,7 +421,8 @@ export async function searchIdsFallback(q, { max = DEFAULT_MAX, timeoutMs = 1500
         score += Math.min(e.duration / MOVIE_DURATION_MIN, 1) * 0.2;
       }
 
-      return { ...e, score, fuzzyScore, yearMatched, shortPenaltyHits };
+      const coverage = coreTokens.length ? (matchedCore / coreTokens.length) : 1;
+      return { ...e, score, fuzzyScore, yearMatched, shortPenaltyHits, matchedCore, coverage };
     }
 
     let scored = enriched.map(scoreEntry);
@@ -438,7 +436,7 @@ export async function searchIdsFallback(q, { max = DEFAULT_MAX, timeoutMs = 1500
 
     let topScore = scored[0]?.score ?? 0;
 
-    // Один мягкий догон, если топ слабый
+    // Single expansion if top is weak
     if (topScore < SCORE_EXPANSION_THRESHOLD && queryCore) {
       const baseSeen = new Set(combined.map((it) => it.id));
       const variants = Array.from(new Set([
@@ -463,7 +461,7 @@ export async function searchIdsFallback(q, { max = DEFAULT_MAX, timeoutMs = 1500
         }
       }
 
-      // Пересчёт
+      // Re-score
       const newEnriched = uniqById(combined).slice(0, candidateLimit).map((item, idx) => {
         const duration = Number.isFinite(item?.duration) ? item.duration : null;
         const title = typeof item?.title === 'string' && item.title.trim() ? item.title.trim() : null;
@@ -481,45 +479,72 @@ export async function searchIdsFallback(q, { max = DEFAULT_MAX, timeoutMs = 1500
       topScore = scored[0]?.score ?? 0;
     }
 
+    // ===== Autoplay gating (before embeddable) =====
+    const isStrongName = (e) => {
+      if (!e || !e.normTitle) return false;
+      const ntVariants = makeVariants(e.normTitle);
+      const anyCoreToken = coreTokens.some(tok => ntVariants.some(v => v.includes(tok)));
+      const strongDice = e.fuzzyScore >= 0.7;
+      const coverageOK = e.coverage >= 0.5;
+      return coverageOK || strongDice || e.yearMatched || anyCoreToken;
+    };
+
     let ordered = scored;
-if (movieLike) {
-  const MIN_AUTOPLAY = Number(process.env.FB_AUTOPLAY_MIN_SEC || 3600); // 60 min
-  const SHORT_DROP   = Number(process.env.FB_SHORT_DROP_SEC   || 1200); // 20 min
-
-  const coreHit = (e) => {
-    if (!e.normTitle) return false;
-    const ntVariants = makeVariants(e.normTitle);
-    let hits = 0;
-    for (const tok of coreTokens) {
-      for (const v of ntVariants) { if (v.includes(tok)) { hits++; break; } }
+    if (movieLike) {
+      const prefer = [];
+      const mid    = [];
+      const short  = [];
+      for (const e of scored) {
+        const d = Number.isFinite(e.duration) ? e.duration : null;
+        if (d == null) {
+          if (!STRICT_UNKNOWN || isStrongName(e)) mid.push(e); // unknown only mid unless strong
+          else short.push(e); // weak unknown treated as short-ish
+        } else if (d >= AUTOPLAY_MIN_SEC) {
+          prefer.push(e);
+        } else if (d >= SHORT_DROP_SEC) {
+          mid.push(e);
+        } else {
+          short.push(e);
+        }
+      }
+      const preferCore = prefer.filter(isStrongName);
+      ordered = [
+        ...(preferCore.length ? preferCore : prefer),
+        ...mid,
+        ...(HIDE_SHORTS ? [] : short),
+      ];
     }
-    return coreTokens.length ? (hits > 0) : true;
-  };
 
-  const prefer = [];
-  const mid    = [];
-  const short  = [];
-
-  for (const e of scored) {
-    const d = Number.isFinite(e.duration) ? e.duration : null;
-    if (d == null || d >= MIN_AUTOPLAY) prefer.push(e);
-    else if (d >= SHORT_DROP)          mid.push(e);
-    else                               short.push(e);
-  }
-
-  const preferCore = prefer.filter(coreHit);
-  ordered = [
-    ...(preferCore.length ? preferCore : prefer),
-    ...mid,
-    ...(String(process.env.FB_HIDE_SHORTS || '0') === '1' ? [] : short),
-  ];
-}
-
-const ids = ordered.map((e) => e.id);
+    const ids = ordered.map((e) => e.id);
     const filtered = await filterEmbeddable(ids, { max: limit, timeoutMs });
 
-    const topId = filtered[0];
-    const topEntry = topId ? scored.find((x) => x.id === topId) : null;
+    // ===== Post-embeddable pruning (safety) =====
+    const byId = new Map(ordered.map(e => [e.id, e]));
+    const final = [];
+    for (const id of filtered) {
+      const e = byId.get(id);
+      if (!e) { final.push(id); continue; } // unknown meta — keep
+      const d = Number.isFinite(e.duration) ? e.duration : null;
+      if (d != null && d < SHORT_DROP_SEC) {
+        if (!HIDE_SHORTS && isStrongName(e)) final.push(id); // only if we were not hiding shorts
+        continue;
+      }
+      if (d == null && STRICT_UNKNOWN && movieLike && !isStrongName(e)) continue;
+      final.push(id);
+      if (final.length >= limit) break;
+    }
+    // fallback if pruning got too strict
+    let result = final;
+    if (!result.length) {
+      const fallbackIds = ordered
+        .filter(e => (Number.isFinite(e.duration) && e.duration >= AUTOPLAY_MIN_SEC) || (e.duration == null && (!STRICT_UNKNOWN || isStrongName(e))))
+        .map(e => e.id);
+      result = fallbackIds.slice(0, limit);
+      if (!result.length) result = filtered.slice(0, limit);
+    }
+
+    const topId = result[0];
+    const topEntry = topId ? (byId.get(topId) || scored.find(x => x.id === topId) || null) : null;
 
     const meta = {
       candidatesTotal: scored.length,
@@ -527,10 +552,10 @@ const ids = ordered.map((e) => e.id);
       rankTopScore: scored[0]?.score ?? 0,
       fuzzy: topEntry?.fuzzyScore ?? 0,
       yearMatch: !!topEntry?.yearMatched,
-      shortPenaltyHits: topEntry?.shortPenaltyHits ?? 0,
+      shortSuppressed: ids.length - result.length,
     };
-    Object.defineProperty(filtered, 'meta', { value: meta, enumerable: false });
-    return filtered;
+    Object.defineProperty(result, 'meta', { value: meta, enumerable: false });
+    return result;
   } finally {
     clearTimeout(to);
   }
