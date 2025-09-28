@@ -1,4 +1,3 @@
-
 // Player-only auto-hide (scoped to .am-player).
 // Does not touch assistant chat controls.
 
