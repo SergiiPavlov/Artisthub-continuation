@@ -413,7 +413,7 @@ async function ytSearchMany(q = '', max = 25) {
 
   // Unicode-aware "movie-like" detection (works for RU/UA/EN)
   // NOTE: \b doesn't work for Cyrillic in JS; use \p{L}\p{N} and lookarounds instead
-  const MOVIE_LIKE_RE = /(?<![\p{L}\p{N}_])(фильм|фильмы|кино|полный\s*фильм|full\s*movie|movie|сериал(?:ы)?|мультфильм(?:ы)?|аудио\s*книг\w*|аудиокниг\w*|audiobook)(?![\p{L}\p{N}_])/iu;
+  const MOVIE_LIKE_RE = /(?<![\p{L}\p{N}_])(фильм|фильмы|кино|полный\s*фильм|full\s*movie|movie|сериал(?:ы)?|мультфильм(?:ы)?|аудио\s*(?:книг|книжк)\w*|аудио(?:книг|книжк)\w*|(?:книг|книжк)\w*|audiobook)(?![\p{L}\p{N}_])/iu;
   const movieLike = MOVIE_LIKE_RE.test(qStr);
 
   // language/region hint for relevance
@@ -423,7 +423,7 @@ async function ytSearchMany(q = '', max = 25) {
 
   // Title filters
   const NEG_RE = /\b(trailer|teaser|shorts?|коротк|тизер|трейлер|обзор|моменты|сцены|выпуск|серия|серии|best\s*moments|moment|клип|clip|remix|parody|gameplay|walkthrough|обрывок|нарезк|шорт|прикол|юмор)\b/iu;
-  const POS_MOV_RE = /\b(полный\s*фильм|full\s*movie|фильм|кино|audiobook|аудио\s*книг\w*)\b/iu;
+  const POS_MOV_RE = /\b(полный\s*фильм|full\s*movie|фильм|кино|audiobook|аудио\s*(?:книг|книжк)\w*|(?:книг|книжк)\w*)\b/iu;
 
   // One API step
   async function doSearch(params) {
@@ -790,4 +790,5 @@ app.listen(PORT, () => {
     `Using PRO(base=${LLM.pro.base}, model=${LLM.pro.model}, key=${LLM.pro.key ? 'set' : 'no'}) | FREE(base=${LLM.free.base}, model=${LLM.free.model})  (${VERSION})`
   );
 });
+
 
