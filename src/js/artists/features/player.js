@@ -274,6 +274,14 @@ export function createMiniPlayer() {
   let lastProgressV = 0;
 
   let autoplayTimer = null;
+  // Sleep timer: pause after N minutes based on deadline checked in startTimer()
+  let __sleepDeadline = 0;
+  function setSleepMinutes(mins) {
+    const m = Math.max(1, Math.round(Number(mins) || 0));
+    __sleepDeadline = Date.now() + m * 60000;
+  }
+  function clearSleep() { __sleepDeadline = 0; }
+
 
   const DOCK_KEY = "amPlayerPos";
   let dockDrag = null;
@@ -456,6 +464,8 @@ function clampBubbleToViewport(margin = 8) {
     
       // resume.js hook: notify current progress for persistence
       emit("progress", { current: cur, duration });
+      if (__sleepDeadline && Date.now() >= __sleepDeadline) { __sleepDeadline = 0; try { yt?.pauseVideo?.(); } catch {} }
+
     }, 250);
   }
   function clearWatchdog() { if (watchdogId) { clearTimeout(watchdogId); watchdogId = null; } }
@@ -566,6 +576,7 @@ function clampBubbleToViewport(margin = 8) {
 
   function safePlayerVars(hasInitialId) {
     const pv = { rel: 0, modestbranding: 1, controls: 1, enablejsapi: 1 };
+    pv.playsinline = 1;
     if (hasInitialId) pv.autoplay = 1;
     try {
       const isFile = location.protocol === 'file:' || location.origin === 'null';
@@ -637,10 +648,29 @@ armStuckGuard();
                   markIdAndMaybeRotate(vd.video_id);
                 }
                 hydrateFromYTPlaylist();
+                // Media Session metadata and handlers
+                if ('mediaSession' in navigator) {
+                  try {
+                    navigator.mediaSession.metadata = new MediaMetadata({
+                      title: vd?.title || 'ArtistsHub',
+                      artist: vd?.author || '',
+                      album: 'ArtistsHub',
+                      // artwork: [{ src: `https://i.ytimg.com/vi/${vd?.video_id}/hqdefault.jpg`, sizes: '480x360', type:'image/jpeg' }],
+                    });
+                    navigator.mediaSession.playbackState = 'playing';
+                    navigator.mediaSession.setActionHandler('play',  () => yt?.playVideo?.());
+                    navigator.mediaSession.setActionHandler('pause', () => yt?.pauseVideo?.());
+                    navigator.mediaSession.setActionHandler('previoustrack', () => prev?.());
+                    navigator.mediaSession.setActionHandler('nexttrack',     () => next?.());
+                  } catch {}
+                }
+
               } catch {}
             } else if (e.data === YT.PlayerState.PAUSED) {
               __uiControlsHidden(false);
               uiPlayIcon(false); setBubblePulse(false); clearTimer(); emit("pause", {});
+              try { if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'paused'; } catch {}
+
             } else if (e.data === YT.PlayerState.ENDED) {
               uiPlayIcon(false); setBubblePulse(false);
               clearTimer(); clearWatchdog(); clearStuckGuard(); clearAutoplayTimer();
@@ -809,6 +839,20 @@ armStuckGuard();
   document.addEventListener("fullscreenchange", syncFsButton);
   document.addEventListener("webkitfullscreenchange", syncFsButton);
   document.addEventListener("assistant:fs-change", syncFsButton); // шлёт fullscreen.js для CSS-фоллбэка
+
+
+  // Visibility: gently resume if the browser throttled background tab
+  document.addEventListener('visibilitychange', () => {
+    try {
+      if (!yt?.getPlayerState) return;
+      if (document.visibilityState === 'visible') {
+        const st = yt.getPlayerState();
+        if (st !== YT.PlayerState.PLAYING && st !== YT.PlayerState.PAUSED && st !== YT.PlayerState.ENDED) {
+          yt.playVideo?.();
+        }
+      }
+    } catch {}
+  });
 
   /* ---------- Buttons ---------- */
   btnClose.addEventListener("click", () => {
@@ -1109,6 +1153,8 @@ const Player = {
   close:      () => get().close(),
   playSearch: (q) => get().playSearch(q),
   seekTo:     (s) => get().seekTo(s),
+  sleep:      (m) => setSleepMinutes(m),
+  clearSleep: () => clearSleep(),
 };
 
 export default Player;
