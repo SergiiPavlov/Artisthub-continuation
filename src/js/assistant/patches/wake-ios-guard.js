@@ -1,10 +1,15 @@
+// src/js/assistant/patches/wake-ios-guard.js
 // iOS wake guard: block unintended mic starts that cause system ducking on iOS.
 // - Prevents webkitSpeechRecognition.start() unless preceded by a trusted user gesture
 // - Ignores programmatic enabling of the wake checkbox (#as-voice) on iOS
 // - No effect on Android/Desktop
 (() => {
   const UA = navigator.userAgent || '';
-  const IS_IOS = /iP(hone|ad|od)/.test(UA);
+  // Classic iOS UA
+  const isIOSUA = /iP(hone|od|ad)/.test(UA);
+  // iPadOS 13+: Safari маскируется под Mac, но с multitouch
+  const isIpadOS13Plus = (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const IS_IOS = isIOSUA || isIpadOS13Plus;
 
   if (!IS_IOS) return;
 
@@ -14,12 +19,11 @@
   function armAllow() { allowUntil = Date.now() + ARM_MS; }
   function isAllowed() { return Date.now() <= allowUntil; }
 
-  // Mark recent *trusted* user gestures
+  // Маркируем последние *доверенные* пользовательские жесты
   ['pointerdown', 'touchstart', 'click', 'keydown'].forEach(ev => {
     window.addEventListener(ev, (e) => {
       try {
         if (e && e.isTrusted === true) {
-          // Ignore pure modifier keys to avoid accidental arming on desktop Safari
           if (ev === 'keydown') {
             const k = String(e.key || '').toLowerCase();
             if (['shift','alt','meta','control','tab'].includes(k)) return;
@@ -30,7 +34,7 @@
     }, { capture: true, passive: true });
   });
 
-  // Patch webkitSpeechRecognition.start to require a trusted gesture window
+  // Патчим webkitSpeechRecognition.start: требуем окно после жеста
   try {
     const SR = window.webkitSpeechRecognition;
     if (SR && SR.prototype && !SR.prototype.__am_ios_guard__) {
@@ -38,7 +42,6 @@
       SR.prototype.start = function guardedStart() {
         if (!isAllowed()) {
           console.warn('[wake-ios-guard] Blocked recognition.start() without recent user gesture.');
-          // Soft-fail: do nothing; caller can handle onerror/onend if needed
           return;
         }
         allowUntil = 0;
@@ -49,17 +52,15 @@
     }
   } catch {}
 
-  // Guard wake checkbox: prevent programmatic enable without user gesture
+  // Гардим чекбокс пробуждения: запрещаем программное включение без жеста
   function hookWakeCheckbox(chk) {
     if (!chk || chk.__am_ios_guard__) return;
 
     const onChange = (e) => {
       try {
-        // If turned on but outside the allowed gesture window — revert
         if (chk.checked && !isAllowed()) {
           console.warn('[wake-ios-guard] Reverting programmatic wake enable on iOS.');
           chk.checked = false;
-          // Stop event propagation if the change was synthetic
           if (e && e.isTrusted === false) {
             e.stopImmediatePropagation?.();
             e.preventDefault?.();
@@ -73,16 +74,16 @@
   }
 
   function findWakeCheckbox() {
-    return document.querySelector('#as-voice') || // your primary id
+    return document.querySelector('#as-voice') || // основной id
            document.querySelector('[data-voice-wake]') || null;
   }
 
-  // Install once DOM is ready
+  // Ставим гарды при готовности DOM
   const onReady = () => {
     const chk = findWakeCheckbox();
     if (chk) hookWakeCheckbox(chk);
 
-    // Watch for the checkbox appearing later (SPA)
+    // Следим за появлением чекбокса позже (SPA)
     const mo = new MutationObserver(() => {
       const el = findWakeCheckbox();
       if (el) hookWakeCheckbox(el);
@@ -90,6 +91,7 @@
     try {
       mo.observe(document.documentElement, { childList: true, subtree: true });
     } catch {}
+
     // tiny API
     window.AM_WakeIOSGuard = {
       uninstall() {
@@ -112,3 +114,4 @@
     onReady();
   }
 })();
+
