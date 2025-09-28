@@ -163,6 +163,47 @@ export function createMiniPlayer() {
   const dragzone = dock.querySelector(".am-player__dragzone");
   const aYTlink  = dock.querySelector(".am-player__ytlink");
   const btnFS    = dock.querySelector(".am-player__fs");
+  /* ---------- Auto-hide controls (smooth) ---------- */
+  const bar      = dock.querySelector(".am-player__bar");
+  function __ensureTrans(el) { if (el && !el.style.transition) el.style.transition = 'opacity .25s ease, transform .25s ease'; }
+  [bar, btnClose, btnHide, btnFS, aYTlink].forEach(__ensureTrans);
+
+  const UI_HIDE_DELAY = matchMedia("(pointer: coarse)").matches ? 1500 : 2500;
+  var __uiHideTimer = null;
+
+  function __uiControlsHidden(on) {
+    const hide = !!on;
+    dock.classList.toggle("am-player--ui-hidden", hide);
+    const setHide = (el, dy='8px') => {
+      if (!el) return;
+      if (hide) { el.style.opacity = '0'; el.style.transform = `translateY(${dy})`; el.style.pointerEvents = 'none'; }
+      else { el.style.opacity = ''; el.style.transform = ''; el.style.pointerEvents = ''; }
+    };
+    setHide(bar, '10px');
+    setHide(btnClose, '4px');
+    setHide(btnHide, '4px');
+    setHide(btnFS, '4px');
+    setHide(aYTlink, '2px');
+  }
+
+  function __uiPoke() {
+    __uiControlsHidden(false);
+    if (__uiHideTimer) clearTimeout(__uiHideTimer);
+    __uiHideTimer = setTimeout(() => __uiControlsHidden(true), UI_HIDE_DELAY);
+  }
+
+  ["pointermove","pointerdown","touchstart","wheel","keydown"].forEach(ev => {
+    dock.addEventListener(ev, (e) => {
+      if (e.type === "keydown") {
+        const k = (e.key || "").toLowerCase();
+        if (["shift","alt","meta","control","tab"].includes(k)) return;
+      }
+      __uiPoke();
+    }, { passive: true });
+  });
+  bar?.addEventListener("pointerover", __uiPoke, { passive: true });
+  bar?.addEventListener("pointerdown", __uiPoke, { passive: true });
+
 
   /* ---------- state ---------- */
   let yt = null;
@@ -341,8 +382,11 @@ export function createMiniPlayer() {
     const isMin = dock.classList.contains("am-player--min");
     if (on) {
       if (!isMin) hideBubble();
+      __uiPoke?.();
     } else {
       hideBubble();
+      if (typeof __uiHideTimer !== "undefined" && __uiHideTimer) { clearTimeout(__uiHideTimer); __uiHideTimer = null; }
+      __uiControlsHidden?.(false);
     }
     emit("state", { active: !!on });
   }
@@ -543,6 +587,7 @@ armStuckGuard();
             emit("state", { state: e.data });
 
             if (e.data === YT.PlayerState.PLAYING) {
+              __uiPoke();
               clearWatchdog(); clearSearchWatch(); clearStuckGuard(); clearAutoplayTimer();
               uiPlayIcon(true); setBubblePulse(true);
               const d = yt.getDuration?.() || 0; if (d > 0) duration = d;
@@ -557,6 +602,7 @@ armStuckGuard();
                 hydrateFromYTPlaylist();
               } catch {}
             } else if (e.data === YT.PlayerState.PAUSED) {
+              __uiControlsHidden(false);
               uiPlayIcon(false); setBubblePulse(false); clearTimer(); emit("pause", {});
             } else if (e.data === YT.PlayerState.ENDED) {
               uiPlayIcon(false); setBubblePulse(false);

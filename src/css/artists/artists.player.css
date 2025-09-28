@@ -537,3 +537,49 @@
   background: linear-gradient(to top, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0));
   z-index: 6;
 }
+
+/* === Auto-hide for am-player controls (smooth) === */
+.am-player__bar,
+.am-player__close,
+.am-player__hide,
+.am-player__fs,
+.am-player__ytlink {
+  transition:
+    opacity 0.25s ease,
+    transform 0.25s ease;
+  will-change: opacity, transform;
+}
+
+/* Скрытое состояние */
+.am-player--ui-hidden .am-player__bar {
+  opacity: 0;
+  transform: translateY(10px);
+  pointer-events: none; /* клики проходят сквозь, чтобы не мешало */
+}
+
+.am-player--ui-hidden .am-player__close,
+.am-player--ui-hidden .am-player__hide,
+.am-player--ui-hidden .am-player__fs,
+.am-player--ui-hidden .am-player__ytlink {
+  opacity: 0;
+  transform: translateY(4px);
+  pointer-events: none;
+}
+
+/* Фуллскрин: чуть сильнее сдвигаем вниз полосу */
+:root.assistant-fs-doc .assistant-fs .am-player--ui-hidden .am-player__bar,
+.am-player:fullscreen.am-player--ui-hidden .am-player__bar,
+.app--fullscreen .am-player--ui-hidden .am-player__bar {
+  transform: translateY(12px);
+}
+
+/* Уважение prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  .am-player__bar,
+  .am-player__close,
+  .am-player__hide,
+  .am-player__fs,
+  .am-player__ytlink {
+    transition: none;
+  }
+}

@@ -1,5 +1,6 @@
 // src/js/assistant/audioUnlocker.js
-// Надёжная «разлочка» звука через WebAudio (без <audio>), + публичный await-хук.
+// Надёжная «разлочка» звука через WebAudio (без <audio>) + публичный await-хук.
+// Главное: НИКАКИХ await до resume()/start — всё синхронно в жесте.
 
 (() => {
   if (window.__AUDIO_UNLOCKER_INIT__) return;
@@ -20,35 +21,34 @@
     return new Promise(res => waiters.push(res));
   };
 
-  // Реальная разлочка через WebAudio (без воспроизведения файлов)
-  async function doUnlock() {
+  // Разлочка строго в контексте пользовательского жеста
+  function doUnlock() {
+    if (unlocked) return;
     try {
       const AC = window.AudioContext || window.webkitAudioContext;
       if (!AC) {
-        // Нечего «разлочивать» — считаем ок
-        unlocked = true;
+        unlocked = true;        // нет WebAudio — считаем ок
         resolveAll();
         return;
       }
 
-      const ctx = new AC();
-      // Некоторым браузерам нужно явно resume()
-      try { await ctx.resume?.(); } catch {}
+      const ctx = new AC();     // создаём лениво (не на уровне модуля)
 
-      // 1 сэмпл тишины
-      const buf = ctx.createBuffer(1, 1, 22050);
+      // ВАЖНО: без await — синхронно в жесте
+      try { ctx.resume?.(); } catch {}
+
+      // 1 сэмпл «тишины» — подтверждает user gesture
+      const buf = ctx.createBuffer(1, 1, ctx.sampleRate);
       const src = ctx.createBufferSource();
       src.buffer = buf;
       src.connect(ctx.destination);
-      try { src.start(0); } catch {}
-
-      // Маленькая пауза, чтобы движок проснулся
-      await new Promise(r => setTimeout(r, 0));
+      try { src.start(0); src.stop(0); } catch {}
 
       unlocked = true;
       resolveAll();
+      // дальше пусть живёт свой жизнью; слушатели снимутся сами (once:true)
     } catch {
-      // Даже если не получилось — не блокируем UX
+      // Не блокируем UX: считаем разлоченным, чтобы код дальше не завис
       unlocked = true;
       resolveAll();
     }
@@ -56,7 +56,7 @@
 
   function tryUnlockOnce() {
     if (unlocked) return;
-    // Запускаем разлочку «в контексте» пользовательского жеста
+    // Запускаем разлочку синхронно в контексте жеста:
     doUnlock();
   }
 

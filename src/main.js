@@ -26,6 +26,7 @@ import './js/hero.js';
 import './js/comments.js';
 import "./js/global-sfx.js";
 import './js/assistant/patches/alias-book.js';
+import './js/assistant/patches/controls-autohide.js';
 
 
 
