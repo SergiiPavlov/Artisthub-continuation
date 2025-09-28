@@ -343,7 +343,7 @@ body {
 
 /* Блок настроек становится прокручиваемым, чтобы нижние кнопки были доступны */
 .assistant__settings {
-  max-height: 42vh; /* можно поджать/расширить по вкусу */
+  max-height: 126vh;
   overflow: auto;
   padding-bottom: 10px;
 }
