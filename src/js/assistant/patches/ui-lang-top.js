@@ -1,4 +1,4 @@
-// ui-lang-top.js — UI language dropdown + short header + layout fixes + robust close + responsive <768px
+// ui-lang-top.js — UI language dropdown + short header + robust layout (messages shrink, settings keep full size)
 (function(){
   'use strict';
 
@@ -84,24 +84,14 @@
     if (settings){ const hints = settings.querySelectorAll('small.assistant__hint'); if (hints && hints.length){ const last = hints[hints.length - 1]; if (last) last.textContent = L.settings.wakeBgHint; } }
   }
 
-  function isMobileLayout(){
-    return window.innerWidth < 768;
-  }
+  function isMobileLayout(){ return window.innerWidth < 768; }
 
   function equalizeSettingsRows(root){
-    const settings = root.querySelector('.assistant__settings');
-    if (!settings) return;
-    const rows = Array.from(settings.querySelectorAll('label.assistant__row'));
-    if (!rows.length) return;
+    const settings = root.querySelector('.assistant__settings'); if (!settings) return;
+    const rows = Array.from(settings.querySelectorAll('label.assistant__row')); if (!rows.length) return;
 
-    // On mobile (<768px) we stack — no equalization
-    if (isMobileLayout()){
-      rows.forEach(r => r.style.minHeight = '');
-      return;
-    }
-
-    const rect = settings.getBoundingClientRect();
-    const midX = rect.left + rect.width / 2;
+    if (isMobileLayout()){ rows.forEach(r => r.style.minHeight = ''); return; }
+    const rect = settings.getBoundingClientRect(); const midX = rect.left + rect.width / 2;
     const left = []; const right = [];
     rows.forEach(r => { r.style.minHeight = ''; const b = r.getBoundingClientRect(); (b.left < midX ? left : right).push(r); });
     const maxLen = Math.max(left.length, right.length);
@@ -112,39 +102,37 @@
   function panelIsOpen(panel){
     if (!panel) return false;
     const cs = getComputedStyle(panel);
-    if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') return false;
+    if (cs.display === 'none' || cs.visibility === 'hidden' || +cs.opacity === 0) return false;
     const r = panel.getBoundingClientRect();
     return r.width > 0 && r.height > 0;
   }
 
   function setupOutsideClose(root){
-    const panel = root.querySelector('.assistant__panel');
-    if (!panel) return;
-
+    const panel = root.querySelector('.assistant__panel'); if (!panel) return;
     function close(){
-      // Prefer a real close button
       const btn = root.querySelector('.assistant__close, .assistant__btn-close, .assistant__hdr .btn-close, .assistant__header .assistant__close');
       if (btn) { btn.dispatchEvent(new MouseEvent('click', { bubbles:true })); return; }
-      // Fallback: toggle bubble if exists
-      const bubble = document.querySelector('.assistant__bubble, #assistant-bubble');
-      if (bubble) { bubble.dispatchEvent(new MouseEvent('click', { bubbles:true })); return; }
+      const bubble = document.querySelector('.assistant__bubble, #assistant-bubble'); if (bubble) { bubble.dispatchEvent(new MouseEvent('click', { bubbles:true })); return; }
       panel.style.display = 'none';
     }
-
-    function onPointerDown(e){
-      if (!panelIsOpen(panel)) return;
-      if (panel.contains(e.target)) return;
-      close();
-    }
+    function onPointerDown(e){ if (!panelIsOpen(panel)) return; if (panel.contains(e.target)) return; close(); }
     document.addEventListener('pointerdown', onPointerDown, true);
     document.addEventListener('mousedown', onPointerDown, true);
     document.addEventListener('touchstart', onPointerDown, { passive:true, capture:true });
-
-    function onKey(e){
-      if (!panelIsOpen(panel)) return;
-      if (e.key === 'Escape' || e.key === 'Esc') close();
-    }
+    function onKey(e){ if (!panelIsOpen(panel)) return; if (e.key === 'Escape' || e.key === 'Esc') close(); }
     document.addEventListener('keydown', onKey);
+  }
+
+  // Try to mark the scrollable chat area (messages/history) so CSS can target it
+  function markLogArea(root){
+    const candidates = root.querySelectorAll('.assistant__log, .assistant__messages, .assistant__history, .assistant__dialog, .assistant__content, .assistant__scroll, .assistant__body');
+    let el = null;
+    candidates.forEach(c => {
+      // Heuristic: must be a block with considerable height above the composer
+      const r = c.getBoundingClientRect();
+      if (r.height > 80 && !el) el = c;
+    });
+    if (el) el.classList.add('as-logarea');
   }
 
   function ensureCss(){
@@ -152,16 +140,32 @@
     if (document.getElementById(id)) return;
     const st = document.createElement('style'); st.id = id;
     st.textContent = `
-      #assistant-root .assistant__panel{ width:min(96vw, 920px) !important; max-width:min(96vw, 920px) !important; overflow:hidden }
+      /* Panel and vertical layout: messages flex, settings don't shrink */
+      #assistant-root .assistant__panel{ width:min(96vw, 920px) !important; max-width:min(96vw, 920px) !important; display:flex; flex-direction:column; overflow:hidden }
+      #assistant-root .assistant__header{ flex:0 0 auto }
+      #assistant-root .assistant__composer, #assistant-root .assistant__inputbar, #assistant-root .assistant__footer{ flex:0 0 auto }
+      #assistant-root .assistant__settings{ flex:0 0 auto; max-height:none !important }
+      /* Any plausible chat log container becomes flex child with scroll */
+      #assistant-root .assistant__panel .assistant__log,
+      #assistant-root .assistant__panel .assistant__messages,
+      #assistant-root .assistant__panel .assistant__history,
+      #assistant-root .assistant__panel .assistant__dialog,
+      #assistant-root .assistant__panel .assistant__content,
+      #assistant-root .assistant__panel .assistant__scroll,
+      #assistant-root .assistant__panel .assistant__body,
+      #assistant-root .assistant__panel .as-logarea{
+        flex:1 1 auto; min-height:0 !important; overflow:auto;
+      }
+
+      /* Top bar */
       #assistant-root .assistant__hdr-actions{ display:flex; flex-wrap:wrap; gap:.35rem .5rem }
       .assistant__uilang-wrap{ display:flex; align-items:center; gap:.35rem; color:#cbd5e1; flex:0 0 auto }
       .assistant__uilang-wrap select{ background:#0b0f14; border:1px solid #263142; color:#e8f1ff; border-radius:8px; padding:.25rem .5rem; min-width:64px }
+
+      /* Settings text wrapping */
       #assistant-root .assistant__settings label.assistant__row span{ white-space:normal; line-height:1.25 }
       #assistant-root .assistant__settings small.assistant__hint{ white-space:normal }
-      @media (max-width: 360px){
-        #assistant-root .assistant__header{ gap:.35rem }
-        #assistant-root .assistant__hdr-actions{ flex-basis:100% }
-      }
+
       /* Checkbox row alignment */
       #assistant-root .assistant__settings label.assistant__row{ display:grid; grid-template-columns:auto 1fr; align-items:center; column-gap:.6rem; min-height:40px }
       #assistant-root .assistant__settings label.assistant__row input[type="checkbox"]{ width:18px; height:18px }
@@ -171,7 +175,13 @@
       @media (max-width: 768px){
         #assistant-root .assistant__settings{ display:block }
         #assistant-root .assistant__settings > *{ display:block !important; width:100% !important; max-width:100% !important }
-        #assistant-root .assistant__settings label.assistant__row{ min-height:unset } /* let rows size naturally */
+        #assistant-root .assistant__settings label.assistant__row{ min-height:unset }
+      }
+
+      /* Tiny screens */
+      @media (max-width: 360px){
+        #assistant-root .assistant__header{ gap:.35rem }
+        #assistant-root .assistant__hdr-actions{ flex-basis:100% }
       }
     `;
     document.head.appendChild(st);
@@ -198,10 +208,11 @@
     sel.value = /^(ru|uk|en)$/.test(initial) ? initial : 'ru';
 
     applyUiLang(sel.value, root);
+    markLogArea(root);
     equalizeSettingsRows(root);
     setupOutsideClose(root);
 
-    const rebalance = () => equalizeSettingsRows(root);
+    const rebalance = () => { markLogArea(root); equalizeSettingsRows(root); };
     window.addEventListener('resize', () => { clearTimeout(window.__as_eq_deb); window.__as_eq_deb = setTimeout(rebalance, 50); });
     setTimeout(rebalance, 100);
 
