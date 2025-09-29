@@ -1,4 +1,4 @@
-// server/search-fallback.mjs — v1.4.1 (2025-09-28)
+// server/search-fallback.mjs — v1.4.2 (2025-09-29)
 // Fallback: Piped → HTML, обогащение title/duration, title-aware ранжирование,
 // жёсткий анти-short для «кино»-запросов. Публичный контракт не меняется.
 // Экспортирует: searchIdsFallback, filterEmbeddable, isMovieQuery.
@@ -459,14 +459,14 @@ export async function searchIdsFallback(q, { max = DEFAULT_MAX, timeoutMs = 1500
     const ids = ordered.map(e => e.id);
     const filtered = await filterEmbeddable(ids, { max: limit, timeoutMs });
 
-    // 8) post-embeddable pruning: ещё раз бережно уберём коротыши
+    // 8) post-embeddable pruning: ещё раз бережно уберём коротыши (Только для кино/аудиокниг)
     const byId = new Map(ordered.map(e => [e.id, e]));
     const final = [];
     for (const id of filtered) {
       const e = byId.get(id);
       if (!e) { final.push(id); continue; } // нет меты — не рискуем, оставляем
       const d = Number.isFinite(e.duration) ? e.duration : null;
-      if (d != null && d < SHORT_DROP_SEC) {
+      if (movieLike && d != null && d < SHORT_DROP_SEC) {
         if (!HIDE_SHORTS && isStrongName(e)) final.push(id);
         continue;
       }
