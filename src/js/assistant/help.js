@@ -75,6 +75,7 @@
         <h4>Quick start</h4>
         <ul class="assistant-help__list">
           <li>Press the mic or type — the assistant replies with text and (optionally) voice.</li>
+          <li>You can activate and use the wake-up word DJ. (It may not work correctly if there is a lot of background noise.)</li>
           <li>In <b>Settings</b> choose language (UK/EN/RU), a voice, and TTS mode.</li>
           <li>Modes: <b>Free</b> = Groq, <b>Pro</b> = OpenAI, <b>Auto</b> = picks automatically.</li>
         </ul>
@@ -143,6 +144,7 @@
         <h4>Швидкий старт</h4>
         <ul class="assistant-help__list">
           <li>Натисніть мікрофон або надрукуйте — асистент відповість текстом і (за потреби) голосом.</li>
+          <li>Можна активувати та використовувати wake-up слово DJ (діджей). (при сильних сторонніх шумах може некоректно спрацьовувати).</li>
           <li>У <b>Налаштуваннях</b> оберіть мову (UK/EN/RU), голос і режим TTS.</li>
           <li>Режими: <b>Free</b> = Groq, <b>Pro</b> = OpenAI, <b>Auto</b> = автоматичний вибір.</li>
         </ul>
@@ -211,6 +213,7 @@
         <h4>Быстрый старт</h4>
         <ul class="assistant-help__list">
           <li>Нажмите микрофон или введите текст — ассистент ответит текстом и (по желанию) голосом.</li>
+           <li>Можно активировать и использовать wake-up слово DJ (ди джей). ( при сильных посторонних шумах может некорректно срабатывать ).</li>
           <li>В <b>Настройках</b> выберите язык (UK/EN/RU), голос и режим TTS.</li>
           <li>Режимы: <b>Free</b> = Groq, <b>Pro</b> = OpenAI, <b>Auto</b> = авто-выбор.</li>
         </ul>
