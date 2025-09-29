@@ -25,6 +25,7 @@ import './js/assistant/patches/wake-ios-guard.js';
 import './js/header.js';
 import './js/hero.js';
 import './js/comments.js';
+import './js/site/settings-sfx.js'; 
 import "./js/global-sfx.js";
 import './js/assistant/patches/alias-book.js';
 import './js/assistant/patches/controls-autohide.js';
