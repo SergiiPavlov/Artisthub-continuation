@@ -8,6 +8,7 @@ import './js/assistant/fullscreen.js';
 import './js/assistant/help.js';
 import './js/assistant/assistant-hooks.js';
 import './js/assistant/chat.js';
+import './js/assistant/patches/ui-lang-top.js';
 import './js/assistant/longform.js';
 import './js/assistant/chat.longform.merge.js';
 import './js/assistant/yt-pro-provider.js';
