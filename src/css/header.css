@@ -119,7 +119,9 @@ section[id] {
   position: relative;
   transform: translateY(-20px);
   opacity: 0;
-  transition: transform 0.4s ease, opacity 0.4s ease;
+  transition:
+    transform 0.4s ease,
+    opacity 0.4s ease;
 }
 .mobile-menu.show .mobile-menu-container {
   transform: translateY(0);
@@ -150,7 +152,9 @@ section[id] {
   width: 24px;
   height: 24px;
   fill: var(--color-white);
-  transition: transform 0.3s ease, fill 0.2s ease;
+  transition:
+    transform 0.3s ease,
+    fill 0.2s ease;
 }
 .mobile-menu-close-btn:hover .mobile-menu-close-icon,
 .mobile-menu-close-btn:focus .mobile-menu-close-icon,
@@ -181,7 +185,10 @@ section[id] {
   font-size: 26px;
   opacity: 0;
   transform: translateY(20px);
-  transition: opacity 0.4s ease, transform 0.4s ease, color 0.2s ease;
+  transition:
+    opacity 0.4s ease,
+    transform 0.4s ease,
+    color 0.2s ease;
 }
 .mobile-menu.show .mobile-menu-nav-link {
   opacity: 1;
@@ -252,7 +259,6 @@ button:focus-visible {
 }
 /* ДЕСKTOP: подсветка только у .active */
 @media (min-width: 768px) {
-
   .header-nav-link.active,
   .header-nav-link.active:hover,
   .header-nav-link.active:focus {
