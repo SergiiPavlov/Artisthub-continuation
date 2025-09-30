@@ -65,10 +65,15 @@ export async function ttsSpeak(arg1, langMaybe, third) {
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
       audio.preload = 'auto';
+      try { audio.playsInline = true; } catch {}
+      try { audio.setAttribute && audio.setAttribute('playsinline',''); } catch {}
 
       // Если есть анлокер — прогрей аудио-контекст перед play()
       if (typeof window.__ensureAudioUnlocked === 'function') {
-        try { await window.__ensureAudioUnlocked(); } catch {}
+        try {
+          const ok = await window.__ensureAudioUnlocked(800);
+          // even if ok===false (timeout), proceed to try .play(); fallback below will handle reject
+        } catch {}
       }
 
       try {
@@ -90,15 +95,30 @@ export async function ttsSpeak(arg1, langMaybe, third) {
     if (!('speechSynthesis' in window)) return false;
     const u = new SpeechSynthesisUtterance(text);
     u.lang = toBCP47(lang);
-    u.rate = 1;
-    u.pitch = 1;
-    if (voice) u.voice = (window.speechSynthesis.getVoices?.() || []).find(v => v.name === voice) || null;
-    // если не нашли подходящий голос — подберём по языку
-    if (!u.voice) {
-      const voices = window.speechSynthesis.getVoices?.() || [];
-      const pref = u.lang.slice(0, 2).toLowerCase();
-      const byLang = voices.filter(v => String(v.lang || '').toLowerCase().startsWith(pref));
-      if (byLang.length) u.voice = byLang[0];
+    u.rate = 1; u.pitch = 1;
+    const pickVoice = () => {
+      if (voice) {
+        const vs = window.speechSynthesis.getVoices?.() || [];
+        u.voice = vs.find(v => v.name === voice) || null;
+      }
+      if (!u.voice) {
+        const vs2 = window.speechSynthesis.getVoices?.() || [];
+        const pref = u.lang.slice(0,2).toLowerCase();
+        const byLang = vs2.filter(v => String(v.lang||'').toLowerCase().startsWith(pref));
+        if (byLang.length) u.voice = byLang[0];
+      }
+    };
+    pickVoice();
+    try { window.speechSynthesis.cancel(); } catch {}
+    try { window.speechSynthesis.resume && window.speechSynthesis.resume(); } catch {}
+    if (!u.voice && (window.speechSynthesis.getVoices?.()||[]).length === 0) {
+      // iOS sometimes populates voices async — wait once, but don't block forever
+      await new Promise((res) => {
+        let done=false; const onv=() => { if(done) return; done=true; try{ window.speechSynthesis.removeEventListener('voiceschanged', onv); }catch{} res(); };
+        try{ window.speechSynthesis.addEventListener('voiceschanged', onv, { once:true }); }catch{}
+        setTimeout(onv, 800);
+      });
+      pickVoice();
     }
     window.speechSynthesis.speak(u);
     return true;

@@ -31,6 +31,8 @@
   overflow: hidden;
   box-shadow: 0 16px 42px rgba(0, 0, 0, 0.5);
   position: relative;
+
+  padding-bottom: 8px;
 }
 
 /* Верхняя «шапка» для перетаскивания */
@@ -51,25 +53,26 @@
 
 .am-player__close,
 .am-player__hide {
-  position: absolute;
-  z-index: 8;
+  position: static;
+  z-index: auto;
   height: 32px;
+  line-height: 32px;
   border-radius: 8px;
   border: 0;
   color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
 }
+
 .am-player__close {
-  top: 8px;
-  right: 8px;
   width: 32px;
   line-height: 32px;
   text-align: center;
   background: #764191;
 }
 .am-player__hide {
-  top: 8px;
-  right: 48px;
   padding: 0 10px;
   background: #3a2a4f;
 }
@@ -120,12 +123,9 @@
   background: rgba(0, 0, 0, 0.6);
 }
 
-.am-player__bar {
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  bottom: 8px;
-  z-index: 5;
+\.am-player__bar {
+  position: static; /* бар не перекрывает iframe */
+  margin-top: 8px; /* отступ от видео */
   display: grid;
   grid-template-columns: auto minmax(140px, 1fr) auto;
   gap: 10px;
@@ -377,6 +377,7 @@
     grid-area: left;
   }
   .am-player__right {
+    align-items: center;
     grid-area: right;
     justify-self: end;
   }
@@ -615,6 +616,7 @@
   gap: 10px;
 }
 .am-player__right {
+  align-items: center;
   justify-self: end;
 }
 
