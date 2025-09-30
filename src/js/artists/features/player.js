@@ -265,6 +265,37 @@ export function createMiniPlayer() {
   });
   bar?.addEventListener("pointerover", __uiPoke, { passive: true });
   bar?.addEventListener("pointerdown", __uiPoke, { passive: true });
+  // --- Mobile single-gesture drag: if UI is hidden and the user taps the center gap,
+  // wake controls and start drag immediately (no extra tap needed).
+  const __maybeBeginDragFromDock = (ev) => {
+    try {
+      const isCoarse = window.matchMedia && matchMedia("(pointer: coarse)").matches;
+      if (!isCoarse) return; // only for touch-like pointers
+      const hidden = dock.classList.contains("am-player--ui-hidden");
+      if (!hidden) return;
+      // Wake UI first
+      __uiPoke();
+      // Use rAF to let layout/opacity update before hit-testing
+      requestAnimationFrame(() => {
+        const dz = dock.querySelector(".am-player__dragzone");
+        if (!dz) return;
+        const r = dz.getBoundingClientRect();
+        const x = ev.clientX ?? (ev.touches && ev.touches[0]?.clientX);
+        const y = ev.clientY ?? (ev.touches && ev.touches[0]?.clientY);
+        if (x == null || y == null) return;
+        if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
+          try { ev.preventDefault(); } catch {}
+          try { ev.stopPropagation(); } catch {}
+          // Forward into the real drag logic; capture on dragzone like bubble does
+          try { dz.setPointerCapture && dz.setPointerCapture(ev.pointerId); } catch {}
+          beginDockDrag(ev);
+        }
+      });
+    } catch {}
+  };
+  dock.addEventListener("touchstart", __maybeBeginDragFromDock, { passive: false });
+  dock.addEventListener("pointerdown", __maybeBeginDragFromDock, { passive: false });
+
 
 
   /* ---------- state ---------- */
