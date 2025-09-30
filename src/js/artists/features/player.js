@@ -266,35 +266,52 @@ export function createMiniPlayer() {
   bar?.addEventListener("pointerover", __uiPoke, { passive: true });
   bar?.addEventListener("pointerdown", __uiPoke, { passive: true });
   // --- Mobile single-gesture drag: if UI is hidden and the user taps the center gap,
-  // wake controls and start drag immediately (no extra tap needed).
-  const __maybeBeginDragFromDock = (ev) => {
-    try {
-      const isCoarse = window.matchMedia && matchMedia("(pointer: coarse)").matches;
-      if (!isCoarse) return; // only for touch-like pointers
-      const hidden = dock.classList.contains("am-player--ui-hidden");
-      if (!hidden) return;
-      // Wake UI first
-      __uiPoke();
-      // Use rAF to let layout/opacity update before hit-testing
-      requestAnimationFrame(() => {
-        const dz = dock.querySelector(".am-player__dragzone");
-        if (!dz) return;
-        const r = dz.getBoundingClientRect();
-        const x = ev.clientX ?? (ev.touches && ev.touches[0]?.clientX);
-        const y = ev.clientY ?? (ev.touches && ev.touches[0]?.clientY);
-        if (x == null || y == null) return;
-        if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
-          try { ev.preventDefault(); } catch {}
-          try { ev.stopPropagation(); } catch {}
-          // Forward into the real drag logic; capture on dragzone like bubble does
-          try { dz.setPointerCapture && dz.setPointerCapture(ev.pointerId); } catch {}
-          beginDockDrag(ev);
-        }
-      });
-    } catch {}
-  };
-  dock.addEventListener("touchstart", __maybeBeginDragFromDock, { passive: false });
-  dock.addEventListener("pointerdown", __maybeBeginDragFromDock, { passive: false });
+  // --- Mobile single-gesture drag: wake + start drag, даже в DevTools-эмуляции
+const __maybeBeginDragFromDock = (ev) => {
+  try {
+    // «Тачевость»: реальный coarse ИЛИ эмуляция (есть touch-поинты)
+    const isTouchish =
+      (window.matchMedia && matchMedia("(pointer: coarse)").matches) ||
+      (navigator && navigator.maxTouchPoints > 0);
+
+    if (!isTouchish) return;                // на десктопной мыши — не вмешиваемся
+    const hidden = dock.classList.contains("am-player--ui-hidden");
+    if (!hidden) return;                    // если панель уже видима — обычная логика и так работает
+
+    const dz = dock.querySelector(".am-player__dragzone");
+    if (!dz) return;
+
+    // Хит-тест ЦЕНТРАЛЬНОЙ зоны прямо сейчас (пока событие cancelable)
+    const r = dz.getBoundingClientRect();
+    const t = (ev.touches && ev.touches[0]) || ev;
+    const x = t && t.clientX, y = t && t.clientY;
+    if (x == null || y == null) return;
+    const inside = (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom);
+    if (!inside) return;
+
+    // ВАЖНО: отменяем дефолт синхронно, чтобы жест не превратился в скролл
+    try { ev.preventDefault(); } catch {}
+    try { ev.stopPropagation && ev.stopPropagation(); } catch {}
+
+    // Будим UI, чтобы панель стала кликабельной
+    __uiPoke();
+
+    // Снимок поинта для стабильности (не использовать ev в rAF)
+    const pt = { clientX: x, clientY: y, pointerId: ev.pointerId ?? undefined };
+
+    // На следующем кадре стартуем нормальный drag
+    requestAnimationFrame(() => {
+      try {
+        if (pt.pointerId != null && dz.setPointerCapture) dz.setPointerCapture(pt.pointerId);
+      } catch {}
+      beginDockDrag(pt);
+    });
+  } catch {}
+};
+
+// слушатели на весь док, чтобы ловить жест при скрытом UI
+dock.addEventListener("touchstart",  __maybeBeginDragFromDock, { passive: false });
+dock.addEventListener("pointerdown", __maybeBeginDragFromDock, { passive: false });
 
 
 
@@ -879,6 +896,20 @@ armStuckGuard();
   dragzone.addEventListener("pointermove", moveDockDrag, { passive: true });
   dragzone.addEventListener("pointerup", endDockDrag, { passive: true });
   dragzone.addEventListener("pointercancel", endDockDrag, { passive: true });
+  // Touch fallback (iOS/Safari): deliver move/up even when PointerEvents act flaky
+  dragzone.addEventListener("touchstart", (ev) => {
+    try { ev.preventDefault(); } catch {}
+    const t = (ev.touches && ev.touches[0]) || ev;
+    beginDockDrag(t);
+  }, { passive: false });
+  dragzone.addEventListener("touchmove", (ev) => {
+    try { ev.preventDefault(); } catch {}
+    const t = (ev.touches && ev.touches[0]) || ev;
+    moveDockDrag(t);
+  }, { passive: false });
+  dragzone.addEventListener("touchend", endDockDrag, { passive: true });
+  dragzone.addEventListener("touchcancel", endDockDrag, { passive: true });
+
 
   window.addEventListener("pointermove", moveDockDrag);
   window.addEventListener("pointerup", endDockDrag);
