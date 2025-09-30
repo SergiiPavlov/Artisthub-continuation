@@ -1,25 +1,32 @@
-// audioUnlocker.iife.js — browser-safe (no ESM exports)
-// Attach to window.AudioUnlocker and window.__unlockAudioNow, no 'export' keywords.
+// audioUnlocker.js — browser-safe IIFE with __ensureAudioUnlocked Promise API
+// Exposes:
+//   window.AudioUnlocker: { isUnlocked(), getContext(), unlockNow() }
+//   window.__unlockAudioNow(): void
+//   window.__ensureAudioUnlocked(): Promise<boolean>
+// No ESM 'export' keywords — safe for <script> without type="module".
 
 (function (global) {
   'use strict';
 
   var Ctx = global.AudioContext || global.webkitAudioContext;
 
-  // No WebAudio? Expose no-op API.
+  // No WebAudio? Expose no-op API that resolves immediately.
   if (!Ctx) {
+    var resolvedTrue = Promise.resolve(true);
     var noop = {
       isUnlocked: function () { return true; },
       getContext: function () { return null; },
-      unlockNow: function () {}
+      unlockNow: function () { /* no-op */ }
     };
     global.AudioUnlocker = noop;
-    global.__unlockAudioNow = noop.unlockNow;
+    global.__unlockAudioNow = function () {};
+    global.__ensureAudioUnlocked = function () { return resolvedTrue; };
     return;
   }
 
   var ctx = null;
   var unlocked = false;
+  var waiters = []; // pending resolvers waiting for unlock
 
   function getContext() {
     if (!ctx) {
@@ -44,22 +51,42 @@
     } catch (e) {}
   }
 
+  function notifyUnlocked() {
+    if (!unlocked) return;
+    // Resolve all pending promises
+    for (var i = 0; i < waiters.length; i++) {
+      try { waiters[i](true); } catch (e) {}
+    }
+    waiters.length = 0;
+    // Detach listeners; we are done
+    detachGlobalListeners();
+  }
+
   function doUnlock() {
     if (unlocked) return;
     var c = getContext();
-    if (!c) { unlocked = true; return; }
+    if (!c) { unlocked = true; notifyUnlocked(); return; }
     try { if (c.state === 'suspended') c.resume(); } catch (e) {}
     try { playVeryShortSilence(c); } catch (e) {}
     setTimeout(function () {
       try { if (c.state === 'suspended') c.resume(); } catch (e) {}
     }, 0);
     unlocked = true;
+    notifyUnlocked();
   }
 
   function tryUnlockOnce() {
     if (unlocked) return;
     doUnlock();
     detachGlobalListeners();
+  }
+
+  // Promise API used by other modules (await window.__ensureAudioUnlocked())
+  function ensureAudioUnlocked() {
+    if (unlocked) return Promise.resolve(true);
+    return new Promise(function (resolve) {
+      waiters.push(resolve);
+    });
   }
 
   var UNLOCK_EVENTS = ['pointerdown','mousedown','touchstart','keydown','click'];
@@ -90,15 +117,18 @@
     }
   }
 
+  // Public API
   var API = {
     isUnlocked: function () { return unlocked; },
     getContext: getContext,
-    unlockNow: tryUnlockOnce
+    unlockNow: function () { tryUnlockOnce(); }
   };
 
   global.AudioUnlocker = API;
   global.__unlockAudioNow = API.unlockNow;
+  global.__ensureAudioUnlocked = ensureAudioUnlocked;
 
+  // Attach listeners immediately so the first gesture unlocks audio
   attachGlobalListeners();
 
 })(typeof window !== 'undefined' ? window : this);
