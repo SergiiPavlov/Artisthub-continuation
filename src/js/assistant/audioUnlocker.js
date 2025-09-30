@@ -78,6 +78,7 @@
   function tryUnlockOnce() {
     if (unlocked) return;
     doUnlock();
+    detachGlobalListeners();
   }
 
   // Promise API used by other modules (await window.__ensureAudioUnlocked())
