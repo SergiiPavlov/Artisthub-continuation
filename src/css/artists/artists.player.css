@@ -367,10 +367,10 @@
 /* --- iPhone/узкие: прогресс на вторую строку, кнопки отдельно --- */
 @media (max-width: 480px) {
   .am-player__bar {
-    grid-template-columns: 1fr auto;
+    grid-template-columns: auto minmax(90px, 1fr) auto;
     grid-template-areas:
-      'left right'
-      'prog prog';
+      'left drag right'
+      'prog prog prog';
     row-gap: 8px;
   }
   .am-player__left {
@@ -653,6 +653,10 @@
 /* === Center the drag handle in the middle gap (no overlap with buttons) === */
 .am-player__dragpad {
   position: relative;
+  min-width: 90px;
+  height: 36px;
+
+  position: relative;
 }
 
 .am-player__dragpad .am-player__handle {
@@ -674,9 +678,61 @@
 }
 
 /* While UI is hidden, disable interaction for all bar children except the drag handle zone */
-.am-player--ui-hidden .am-player__bar > * {
+.am-player--ui-hidden .am-player__bar > :not(.am-player__dragpad) {
   pointer-events: none;
 }
 .am-player--ui-hidden .am-player__bar .am-player__dragzone {
   pointer-events: auto;
+}
+
+/* Drag button in the middle */
+.am-player__dragbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 36px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  font:
+    600 12px/1.2 'IBM Plex Sans',
+    system-ui,
+    -apple-system,
+    Segoe UI,
+    Roboto,
+    Arial,
+    sans-serif;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.am-player__dragbtn:active {
+  cursor: grabbing;
+}
+.am-player__dragbtn .am-grip {
+  pointer-events: none;
+  display: inline-block;
+  width: 28px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow:
+    0 6px 0 0 rgba(255, 255, 255, 0.9),
+    0 -6px 0 0 rgba(255, 255, 255, 0.9);
+}
+
+.am-player--ui-hidden .am-player__bar > :not(.am-player__dragpad) {
+  pointer-events: none;
+}
+.am-player--ui-hidden .am-player__dragpad,
+.am-player--ui-hidden .am-player__dragbtn {
+  pointer-events: auto;
+}
+
+.am-player__dragpad,
+.am-player__dragbtn {
+  touch-action: none;
 }
