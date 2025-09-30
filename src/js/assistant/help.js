@@ -133,6 +133,12 @@
           <li>Allow microphone/sound for the site.</li>
           <li>Check the green <code>AI</code> badge and that <code>window.API_BASE</code> points to your server.</li>
         </ul>
+      
+        <hr style="border-color:rgba(255,255,255,.08);margin:16px 0">
+<p class="assistant-help__legal"><strong>Legal</strong>:
+  <a href="legal/terms.html" target="_blank" rel="noopener">Terms of Use</a> ·
+  <a href="legal/privacy.html" target="_blank" rel="noopener">Privacy Policy</a>
+</p>
       </div>
 
       <!-- UK -->
@@ -203,6 +209,12 @@
           <li>Дозвольте мікрофон та звук для сайту.</li>
           <li>Перевірте, що зелений бейдж <code>AI</code> активний і <code>window.API_BASE</code> вказує на ваш сервер.</li>
         </ul>
+      
+        <hr style="border-color:rgba(255,255,255,.08);margin:16px 0">
+<p class="assistant-help__legal"><strong>Правове</strong>:
+  <a href="legal/terms.html" target="_blank" rel="noopener">Умови використання</a> ·
+  <a href="legal/privacy.html" target="_blank" rel="noopener">Політика конфіденційності</a>
+</p>
       </div>
 
       <!-- RU -->
@@ -273,6 +285,12 @@
           <li>Разрешите микрофон/звук для сайта.</li>
           <li>Проверьте зелёный бейдж <code>AI</code> и что <code>window.API_BASE</code> указывает на ваш сервер.</li>
         </ul>
+      
+        <hr style="border-color:rgba(255,255,255,.08);margin:16px 0">
+<p class="assistant-help__legal"><strong>Юридическое</strong>:
+  <a href="legal/terms.html" target="_blank" rel="noopener">Условия использования</a> ·
+  <a href="legal/privacy.html" target="_blank" rel="noopener">Политика конфиденциальности</a>
+</p>
       </div>
     </div>
   `;

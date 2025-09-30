@@ -583,3 +583,88 @@
     transition: none;
   }
 }
+
+/* === Override: drag zone must be ONLY the middle gap, not overlay the whole bar === */
+.am-player__dragpad.am-player__dragzone {
+  position: static !important;
+  top: auto !important;
+  left: auto !important;
+  right: auto !important;
+  height: 32px !important;
+  z-index: auto !important;
+  background: transparent !important;
+  cursor: grab;
+}
+.am-player__dragpad.am-player__dragzone:active {
+  cursor: grabbing;
+}
+
+/* Bottom bar grid left | drag | right */
+.am-player__bar {
+  position: static;
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  column-gap: 12px;
+}
+.am-player__left,
+.am-player__right {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.am-player__right {
+  justify-self: end;
+}
+
+/* Handle icon inside dragpad for affordance */
+.am-player__handle {
+  display: inline-block;
+  opacity: 0.6;
+  font-weight: 700;
+  letter-spacing: 2px;
+  transform: translateY(-1px);
+}
+.am-player__dragpad:hover .am-player__handle {
+  opacity: 0.9;
+}
+
+/* Ensure buttons are fully interactive */
+.am-player__left button,
+.am-player__right button {
+  pointer-events: auto;
+}
+
+/* No overlays over the iframe */
+.am-player__wake {
+  display: none !important;
+  pointer-events: none !important;
+}
+.am-player__host iframe {
+  pointer-events: auto !important;
+}
+
+/* Keep frame clean */
+.am-player__frame {
+  margin-top: 0;
+}
+
+/* === Center the drag handle in the middle gap (no overlap with buttons) === */
+.am-player__dragpad {
+  position: relative;
+}
+
+.am-player__dragpad .am-player__handle {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none; /* keep full drag on the whole middle zone */
+  opacity: 0.7;
+}
+
+.am-player__dragpad:hover .am-player__handle {
+  opacity: 0.95;
+}
+

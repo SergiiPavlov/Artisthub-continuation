@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+    <title>Terms of Use · ArtistsHub</title>
+    <style>
+      :root {
+        --bg: #0f1216;
+        --fg: #e8f1ff;
+        --muted: #95a3b8;
+        --card: #121821;
+        --accent: #37507a;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font-family:
+          'IBM Plex Sans',
+          system-ui,
+          -apple-system,
+          Segoe UI,
+          Roboto,
+          Arial,
+          sans-serif;
+      }
+      .wrap {
+        max-width: 940px;
+        margin: 40px auto;
+        padding: 0 16px;
+      }
+      header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+      h1 {
+        font-size: 1.4rem;
+        margin: 0;
+      }
+      nav button {
+        background: #16202b;
+        color: var(--fg);
+        border: 1px solid #2b3e59;
+        border-radius: 10px;
+        padding: 0.45rem 0.7rem;
+        cursor: pointer;
+      }
+      nav button[aria-selected='true'] {
+        background: #1a2331;
+        border-color: var(--accent);
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 14px;
+        padding: 18px;
+      }
+      .lang {
+        display: none;
+      }
+      .lang[aria-hidden='false'] {
+        display: block;
+      }
+      a {
+        color: #b5cdf7;
+      }
+      footer {
+        opacity: 0.85;
+        color: var(--muted);
+        margin: 24px 0;
+      }
+      .toplinks a {
+        margin-right: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <h1 data-i18n="title">Terms of Use</h1>
+        <nav role="tablist" aria-label="Language">
+          <button
+            class="langbtn"
+            data-lang="en"
+            role="tab"
+            aria-selected="true"
+          >
+            English
+          </button>
+          <button
+            class="langbtn"
+            data-lang="uk"
+            role="tab"
+            aria-selected="false"
+          >
+            Українська
+          </button>
+          <button
+            class="langbtn"
+            data-lang="ru"
+            role="tab"
+            aria-selected="false"
+          >
+            Русский
+          </button>
+        </nav>
+      </header>
+
+      <div class="toplinks">
+        <a href="../index.html">← Back to site</a>
+        <a href="terms.html">Terms of Use</a>
+        <a href="privacy.html">Privacy Policy</a>
+      </div>
+
+      <main class="card">
+        <section id="lang-en" class="lang" aria-hidden="false">
+          <h2>Terms of Use</h2>
+          <p>
+            By using this website and its chat/player features, you agree to
+            these Terms and to the
+            <a
+              href="https://www.youtube.com/t/terms"
+              target="_blank"
+              rel="noopener"
+              >YouTube Terms of Service</a
+            >.
+          </p>
+          <ul>
+            <li>
+              We embed the official YouTube player and use the YouTube IFrame
+              API according to the documented parameters.
+            </li>
+            <li>
+              We do not modify the player behavior beyond what the API permits.
+            </li>
+            <li>
+              You may be redirected to YouTube to view content or learn more.
+            </li>
+            <li>
+              We may update these Terms; the latest version is always published
+              on this page.
+            </li>
+          </ul>
+          <h3>Contact</h3>
+          <p>
+            For questions or concerns:
+            <a href="mailto:contact@example.com">pavlovsergii106@gmail.com</a>
+          </p>
+        </section>
+        <section id="lang-uk" class="lang" aria-hidden="true">
+          <h2>Умови використання</h2>
+          <p>
+            Використовуючи цей сайт і його чат/плеєр, ви погоджуєтеся з цими
+            Умовами та з
+            <a
+              href="https://www.youtube.com/t/terms"
+              target="_blank"
+              rel="noopener"
+              >Умовами надання послуг YouTube</a
+            >.
+          </p>
+          <ul>
+            <li>
+              Ми вбудовуємо офіційний плеєр YouTube і використовуємо IFrame API
+              відповідно до документації.
+            </li>
+            <li>
+              Ми не змінюємо поведінку плеєра понад дозволені параметри API.
+            </li>
+            <li>
+              Вас можуть перенаправити на YouTube для перегляду контенту чи
+              отримання додаткової інформації.
+            </li>
+            <li>
+              Ми можемо оновлювати ці Умови; остання версія завжди опублікована
+              на цій сторінці.
+            </li>
+          </ul>
+          <h3>Контакти</h3>
+          <p>
+            З питань звертайтесь:
+            <a href="mailto:contact@example.com">pavlovsergii106@gmail.com</a>
+          </p>
+        </section>
+        <section id="lang-ru" class="lang" aria-hidden="true">
+          <h2>Условия использования</h2>
+          <p>
+            Пользуясь этим сайтом и его чат/плеером, вы соглашаетесь с
+            настоящими Условиями и с
+            <a
+              href="https://www.youtube.com/t/terms"
+              target="_blank"
+              rel="noopener"
+              >Условиями использования YouTube</a
+            >.
+          </p>
+          <ul>
+            <li>
+              Мы встраиваем официальный плеер YouTube и используем IFrame API в
+              рамках задокументированных параметров.
+            </li>
+            <li>Мы не модифицируем поведение плеера сверх возможностей API.</li>
+            <li>
+              Вас могут перенаправлять на YouTube для просмотра контента или
+              уточнения информации.
+            </li>
+            <li>
+              Мы можем обновлять эти Условия; актуальная версия всегда размещена
+              на этой странице.
+            </li>
+          </ul>
+          <h3>Контакты</h3>
+          <p>
+            По вопросам:
+            <a href="mailto:contact@example.com">pavlovsergii106@gmail.com</a>
+          </p>
+        </section>
+      </main>
+
+      <footer>
+        © 2025 ArtistsHub · This page discloses required information for
+        YouTube API Services users.
+      </footer>
+    </div>
+
+    <script>
+      const btns = document.querySelectorAll('.langbtn');
+      const titles = {
+        en: 'Terms of Use',
+        uk: '\u0423\u043c\u043e\u0432\u0438 \u0432\u0438\u043a\u043e\u0440\u0438\u0441\u0442\u0430\u043d\u043d\u044f',
+        ru: '\u0423\u0441\u043b\u043e\u0432\u0438\u044f \u0438\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u043d\u0438\u044f',
+      };
+      btns.forEach(b =>
+        b.addEventListener('click', () => {
+          const lang = b.dataset.lang;
+          btns.forEach(x =>
+            x.setAttribute('aria-selected', x === b ? 'true' : 'false')
+          );
+          document
+            .querySelectorAll('.lang')
+            .forEach(s => s.setAttribute('aria-hidden', 'true'));
+          document
+            .getElementById('lang-' + lang)
+            .setAttribute('aria-hidden', 'false');
+          document.querySelector('h1[data-i18n="title"]').textContent =
+            titles[lang] || titles.en;
+          document.documentElement.lang = lang;
+          try {
+            localStorage.setItem('ah_legal_lang', lang);
+          } catch (e) {}
+        })
+      );
+      (function () {
+        try {
+          const lang = localStorage.getItem('ah_legal_lang');
+          if (
+            lang &&
+            document.querySelector('.langbtn[data-lang="' + lang + '"]')
+          ) {
+            document
+              .querySelector('.langbtn[data-lang="' + lang + '"]')
+              .click();
+          }
+        } catch (e) {}
+      })();
+    </script>
+  </body>
+</html>

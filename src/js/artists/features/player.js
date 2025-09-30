@@ -112,38 +112,41 @@ export function createMiniPlayer() {
   const dock = document.createElement("div");
   dock.className = "am-player";
   dock.innerHTML = `
-    <div class="am-player__inner">
-      <div class="am-player__dragzone" aria-hidden="true" title="Drag the player"></div>
-      <button class="am-player__hide" type="button" aria-label="Hide">Hide</button>
-      <button class="am-player__close" type="button" aria-label="Close">×</button>
-
-      <!-- Fullscreen button (under Close) -->
-      <button class="am-player__fs" type="button" aria-label="Fullscreen" title="Fullscreen" data-fullscreen-btn>⤢</button>
-
-      <div class="am-player__frame">
-        <div class="am-player__host" id="am-player-host"></div>
-        <a class="am-player__ytlink" href="#" target="_blank" rel="noopener noreferrer" aria-label="Open on YouTube">YouTube ↗</a>
-      </div>
-
-      <div class="am-player__bar">
-        <div class="am-player__left">
-          <button class="am-player__skip am-player__prev" type="button" aria-label="Previous">⏮</button>
-          <button class="am-player__play" type="button" aria-label="Play/Pause">▶</button>
-          <button class="am-player__skip am-player__next" type="button" aria-label="Next">⏭</button>
-          <span class="am-player__time"><span class="am-player__cur">0:00</span> / <span class="am-player__dur">0:00</span></span>
-        </div>
-
-        <div class="am-player__progresswrap">
-          <input class="am-player__progress" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek">
-        </div>
-
-        <div class="am-player__right">
-          <button class="am-player__mute" type="button" aria-label="Mute/Unmute">🔈</button>
-          <input class="am-player__slider" type="range" min="0" max="100" value="60" step="1" aria-label="Volume">
-        </div>
-      </div>
+  <div class="am-player__inner">
+    <div class="am-player__frame">
+      <div class="am-player__host" id="am-player-host"></div>
     </div>
-  `;
+
+    <div class="am-player__bar">
+      <div class="am-player__left">
+        <button class="am-player__skip am-player__prev" type="button" aria-label="Previous">⏮</button>
+        <button class="am-player__skip am-player__next" type="button" aria-label="Next">⏭</button>
+      </div>
+
+      <div class="am-player__dragpad am-player__dragzone" aria-label="Drag player" title="Drag">
+        <span class="am-player__handle" aria-hidden="true">⋮⋮</span>
+      </div>
+
+      <div class="am-player__right">
+        <button class="am-player__hide" type="button" aria-label="Hide">Hide</button>
+        <button class="am-player__close" type="button" aria-label="Close">×</button>
+      </div>
+
+      
+      <!-- Hidden legacy controls to keep JS hooks alive (do not remove) -->
+      <div class="am-player__legacy" style="display:none">
+        <button class="am-player__play" data-action="play"></button>
+        <button class="am-player__mute" data-action="mute"></button>
+        <button class="am-player__fs" data-fullscreen-btn></button>
+        <a class="am-player__ytlink" href="#" target="_blank" rel="noopener noreferrer"></a>
+        <div class="am-player__time"><span class="am-player__cur"></span> / <span class="am-player__dur"></span></div>
+        <div class="am-player__progresswrap"><input class="am-player__progress" type="range" min="0" max="100" step="0.1" value="0"></div>
+        <input class="am-player__slider" type="range" min="0" max="100" step="1" value="100" aria-label="Volume">
+      </div>
+
+    </div>
+  </div>
+`;
   document.body.appendChild(dock);
 
   let bubble = null;
@@ -189,6 +192,21 @@ export function createMiniPlayer() {
 
   /* ---------- Auto-hide controls (smooth) ---------- */
   const bar      = dock.querySelector(".am-player__bar");
+  // Guard: prevent drag from starting when clicking any buttons in left/right clusters
+  try {
+    const barLeft  = dock.querySelector('.am-player__left');
+    const barRight = dock.querySelector('.am-player__right');
+    const stop = e => e.stopPropagation();
+    [barLeft, barRight].forEach(cluster => {
+      if (!cluster) return;
+      cluster.querySelectorAll('button, a, input, [role="button"]').forEach(el => {
+        el.addEventListener('pointerdown', stop, {passive:true});
+        el.addEventListener('mousedown',   stop, {passive:true});
+        el.addEventListener('touchstart',  stop, {passive:true});
+      });
+    });
+  } catch {}
+
   function __ensureTrans(el) { if (el && !el.style.transition) el.style.transition = 'opacity .25s ease, transform .25s ease'; }
   [bar, btnClose, btnHide, btnFS, aYTlink].forEach(__ensureTrans);
 
@@ -198,7 +216,7 @@ export function createMiniPlayer() {
   function __uiControlsHidden(on) {
     const hide = !!on;
     dock.classList.toggle("am-player--ui-hidden", hide);
-    try { if (typeof wake !== "undefined" && wake) wake.style.pointerEvents = hide ? "auto" : "none"; } catch {}
+    try { if (typeof wake !== "undefined" && wake) wake.style.pointerEvents = "none"; } catch {}
 
     const setHide = (el, dy='8px') => {
       if (!el) return;
