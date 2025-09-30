@@ -668,3 +668,7 @@
   opacity: 0.95;
 }
 
+/* Explicitly enable touch dragging on mobile */
+.am-player__dragpad {
+  touch-action: none;
+}

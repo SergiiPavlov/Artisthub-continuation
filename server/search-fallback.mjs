@@ -70,8 +70,25 @@ function containsAny(text, arr) {
 export function isMovieQuery(q = '') {
   const t = normalizeTitleText(q);
   if (!t) return false;
-  if (t.includes('полный фильм') || t.includes('full movie')) return true;
-  if (/(19|20)\d{2}/.test(q)) return true; // год — частый маркер фильма
+
+  // Negative hints: likely not a movie
+  const NEG = [
+    'song','songs','official video','audio','mix','remix','cover','karaoke','lyrics','lyric',
+    'playlist','live','concert','clip','video clip','музыка','песня','песни','клип','саундтрек','ost','трек',
+    'best hits','top hits','хиты','лучшие песни','рок','rap','pop'
+  ];
+  if (NEG.some(s => t.includes(s))) return false;
+
+  // Positive hints: explicit movie intent
+  const POS = [
+    'full movie','movie','film','фильм','полный фильм','кино','повнометражний фільм','фільм'
+  ];
+  if (POS.some(s => t.includes(s))) return true;
+
+  // Year alone is not a reliable signal; require explicit movie tokens
+  // e.g. "best hits 2024" should NOT be treated as a movie
+  return false;
+}/.test(q)) return true; // год — частый маркер фильма
   if (t.includes('фильм') || t.includes('кино') || t.includes('movie') || t.includes('film')) return true;
   return false;
 }

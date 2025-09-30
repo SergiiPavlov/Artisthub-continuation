@@ -186,6 +186,24 @@ export function createMiniPlayer() {
     frame.style.position = 'relative';
   }
   frame?.appendChild(wake);
+  // RMF-safe wake: no overlay intercepts. Use global mousemove and geometry test.
+  try {
+    let __ah_lastWakeTS = 0;
+    const __ah_wakeOnMouseMove = (ev) => {
+      const now = performance.now ? performance.now() : Date.now();
+      if (now - __ah_lastWakeTS < 50) return; // throttle ~20Hz
+      __ah_lastWakeTS = now;
+      const fr = frame?.getBoundingClientRect?.();
+      if (!fr) return;
+      const x = ev.clientX, y = ev.clientY;
+      if (x >= fr.left && x <= fr.right && y >= fr.top && y <= fr.bottom) {
+        try { __uiPoke?.(); } catch {}
+      }
+    };
+    window.addEventListener('mousemove', __ah_wakeOnMouseMove, { passive: true });
+    window.addEventListener('touchmove', __ah_wakeOnMouseMove, { passive: true });
+  } catch {}
+
   ['pointermove','pointerdown','touchstart','wheel','click'].forEach(ev => {
     wake.addEventListener(ev, () => { try { __uiPoke?.(); } catch {} }, { passive: true });
   });
@@ -790,7 +808,7 @@ armStuckGuard();
     }
   }
   function beginDockDrag(e) {
-    if (!dock.classList.contains("am-player--free")) {
+    try { e.preventDefault(); } catch {} if (!dock.classList.contains("am-player--free")) {
       const r = dock.getBoundingClientRect();
       dock.classList.add("am-player--free");
       dock.style.transform = "none";
@@ -827,8 +845,13 @@ armStuckGuard();
     clampDock();
   }
   dragzone.addEventListener("pointerdown", beginDockDrag);
+  dragzone.addEventListener("pointermove", moveDockDrag, { passive: true });
+  dragzone.addEventListener("pointerup", endDockDrag, { passive: true });
+  dragzone.addEventListener("pointercancel", endDockDrag, { passive: true });
+
   window.addEventListener("pointermove", moveDockDrag);
   window.addEventListener("pointerup", endDockDrag);
+  window.addEventListener("pointercancel", endDockDrag);
   window.addEventListener("resize", clampDock);
   window.visualViewport?.addEventListener("resize", clampDock);
   window.addEventListener("orientationchange", clampDock);

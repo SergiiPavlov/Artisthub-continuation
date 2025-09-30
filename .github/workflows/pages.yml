@@ -40,6 +40,9 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: ./dist
+      - name: Add SPA fallback (404.html)
+        run: |
+          cp ./dist/index.html ./dist/404.html || copy .\dist\index.html .\dist\404.html
 
   deploy:
     needs: build
