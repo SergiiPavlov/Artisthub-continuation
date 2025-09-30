@@ -554,7 +554,7 @@
 .am-player--ui-hidden .am-player__bar {
   opacity: 0;
   transform: translateY(10px);
-  pointer-events: none; /* клики проходят сквозь, чтобы не мешало */
+  /* pointer-events kept enabled, we will disable on children except dragzone */
 }
 
 .am-player--ui-hidden .am-player__close,
@@ -671,4 +671,12 @@
 /* Explicitly enable touch dragging on mobile */
 .am-player__dragpad {
   touch-action: none;
+}
+
+/* While UI is hidden, disable interaction for all bar children except the drag handle zone */
+.am-player--ui-hidden .am-player__bar > * {
+  pointer-events: none;
+}
+.am-player--ui-hidden .am-player__bar .am-player__dragzone {
+  pointer-events: auto;
 }
