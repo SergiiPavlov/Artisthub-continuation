@@ -30,7 +30,7 @@ export default defineConfig(({ command, mode }) => {
       sourcemap: true,
       rollupOptions: {
         // входные html
-        input: glob.sync("./src/*.html"),
+        input: [...new Set([...glob.sync("./src/*.html"), ...glob.sync("./src/legal/*.html")]) ],
       },
       outDir: "../dist",
       emptyOutDir: true,
