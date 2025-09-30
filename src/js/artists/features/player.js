@@ -237,9 +237,18 @@ export function createMiniPlayer() {
     try { if (typeof wake !== "undefined" && wake) wake.style.pointerEvents = "none"; } catch {}
 
     const setHide = (el, dy='8px') => {
-      if (!el) return;
-      if (hide) { el.style.opacity = '0'; el.style.transform = `translateY(${dy})`; el.style.pointerEvents = 'none'; }
-      else { el.style.opacity = ''; el.style.transform = ''; el.style.pointerEvents = ''; }
+  if (!el) return;
+  if (hide) {
+    el.style.opacity = '0';
+    el.style.transform = `translateY(${dy})`;
+    // Do NOT disable pointer-events for the bar itself; CSS controls interactivity of its children.
+    if (el !== bar) { el.style.pointerEvents = 'none'; } else { el.style.pointerEvents = ''; }
+  } else {
+    el.style.opacity = '';
+    el.style.transform = '';
+    // Clear inline pointer-events so CSS can handle it.
+    el.style.pointerEvents = '';
+  }
     };
     setHide(bar, '10px');
     setHide(btnClose, '4px');
