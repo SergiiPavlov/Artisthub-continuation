@@ -18,6 +18,57 @@ var c = (typeof c === 'function')
   window.addEventListener('keydown', mark, { once:true });
 })();
 
+  // ─── platform & audio helpers ────────────────────────────────────────
+  const isIOS = (function(){
+    try {
+      const ua = navigator.userAgent || "";
+      const iOSDevice = /iP(hone|ad|od)/.test(ua);
+      const iPadOS = navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
+      return iOSDevice || iPadOS;
+    } catch { return false; }
+  })();
+
+  async function tryPlayWavWithWebAudio(arrayBuffer) {
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return false;
+      const ctx = (window.AudioUnlocker && window.AudioUnlocker.getContext && window.AudioUnlocker.getContext()) || new Ctx();
+      try { await ctx.resume?.(); } catch {}
+      const audioBuffer = await ctx.decodeAudioData(arrayBuffer.slice(0));
+      const src = ctx.createBufferSource();
+      src.buffer = audioBuffer;
+      src.connect(ctx.destination);
+      return await new Promise((resolve) => {
+        src.onended = () => resolve(true);
+        try { src.start(0); } catch { resolve(false); }
+        setTimeout(() => resolve(true), 260);
+      });
+    } catch (e) {
+      console.warn("[tts] tryPlayWavWithWebAudio error", e);
+      return false;
+    }
+  }
+
+  async function waitForVoicesReady(timeoutMs = 1500) {
+    if (!("speechSynthesis" in window)) return [];
+    try {
+      const ss = window.speechSynthesis;
+      let voices = ss.getVoices?.() || [];
+      if (voices.length) return voices;
+      return await new Promise((resolve) => {
+        const step = 100;
+        let waited = 0;
+        const id = setInterval(() => {
+          voices = ss.getVoices?.() || [];
+          if (voices.length || waited >= timeoutMs) {
+            clearInterval(id); resolve(voices);
+          }
+          waited += step;
+        }, step);
+      });
+    } catch { return []; }
+  }
+
 
 // Chat Friend + AI bridge with memory + Provider + Server/Browser TTS
 // VERSION: chat.js v2.8.9
@@ -452,6 +503,7 @@ var c = (typeof c === 'function')
     refreshVoices();
   });
 
+
   // ─── server TTS (buffered, explicit lang) ────────────────────────────
   async function speakServer(text, lang) {
     if (!API_BASE) throw new Error("no API");
@@ -470,43 +522,83 @@ var c = (typeof c === 'function')
       throw new Error(msg);
     }
     const buf = await r.arrayBuffer();
+
+    try {
+      if (isIOS && typeof window.__ensureAudioUnlocked === "function") {
+        const unlocked = await window.__ensureAudioUnlocked();
+        if (unlocked) {
+          const ok = await tryPlayWavWithWebAudio(buf);
+          if (ok) return;
+        }
+      }
+    } catch (e) {
+      console.warn("[tts] WebAudio path failed, will try <audio>.play()", e);
+    }
+
     const urlObj = URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
     const audio = new Audio(urlObj);
     audio.preload = "auto";
+    const cleanup = () => { try { URL.revokeObjectURL(urlObj); } catch {} };
+
     try {
       await audio.play();
     } catch (e) {
+      cleanup();
       console.warn("[tts] play() blocked:", e);
+      try { speakBrowser(text, lang); } catch {}
+      throw e;
     }
-    audio.onended = () => URL.revokeObjectURL(urlObj);
-    audio.onerror = () => console.error("[tts] audio error:", audio.error);
+
+    audio.onended = cleanup;
+    audio.onerror = (err) => {
+      cleanup();
+      console.error("[tts] audio error:", audio.error || err);
+      try { speakBrowser(text, lang); } catch {}
+    };
   }
   async function ttsServerSpeak(text, lang) {
     return speakServer(text, lang);
   }
 
-  // ─── browser TTS (strict voice match) ────────────────────────────────
+  // ─── browser TTS (robust voice selection) ────────────────────────────
   function speakBrowser(text, lang) {
     try {
-      if (!("speechSynthesis" in window)) return;
-      try {
-        window.speechSynthesis.cancel();
-      } catch {}
+      if (!("speechSynthesis" in window)) return false;
+      try { window.speechSynthesis.cancel(); } catch {}
       const u = new SpeechSynthesisUtterance(text);
+
       const want = codeToBCP47(lang);
-      const wantPrefix = want.slice(0, 2);
-      const voices = (window.speechSynthesis.getVoices?.() || []).filter((v) =>
-        String(v.lang || "").toLowerCase().startsWith(wantPrefix)
-      );
-      let v = voices.find((v) => v.name === tts.voiceName);
-      if (!v) v = voices[0];
-      if (v) u.voice = v;
-      u.lang = want;
-      u.rate = 1;
-      u.pitch = 1;
-      window.speechSynthesis.speak(u);
-    } catch {}
+      const wantPrefix = (want || "").slice(0, 2).toLowerCase();
+
+      (async () => {
+        const V = await waitForVoicesReady(1800);
+        let v = null;
+
+        if (tts.voiceName) v = V.find((x) => x.name === tts.voiceName) || null;
+        if (!v && wantPrefix) v = V.find((x) => String(x.lang || "").toLowerCase().startsWith(wantPrefix)) || null;
+        if (!v) v = V.find((x) => String(x.lang || "").toLowerCase().startsWith("ru")) || null;
+        if (!v) v = V.find((x) => String(x.lang || "").toLowerCase().startsWith("en")) || null;
+        if (!v && V.length) v = V[0];
+
+        if (v) {
+          u.voice = v;
+          try { u.lang = v.lang || want; } catch {}
+        } else {
+          try { u.lang = want; } catch {}
+        }
+
+        u.rate = 1;
+        u.pitch = 1;
+        try { window.speechSynthesis.speak(u); } catch (e) { console.warn("[tts] speechSynthesis failed", e); }
+      })();
+
+      return true;
+    } catch (e) {
+      console.warn("[tts] speakBrowser error", e);
+      return false;
+    }
   }
+
 
   // ─── public speak() ──────────────────────────────────────────────────
   function speak(text) {
