@@ -219,6 +219,8 @@ var c = (typeof c === 'function')
     .assistant__mic{background:#1f2836 !important;border:1px solid #2a3a52 !important;color:#cbd5e1 !important}
     .assistant__mic.is-on{outline:2px solid #0ea5e9}
     .assistant__settings{padding:.75rem;border-top:1px solid rgba(255,255,255,.08);background:#0f1216}
+.assistant__panel--scrollable{overflow:auto;-webkit-overflow-scrolling:touch}
+.assistant__panel--scrollable .assistant__settings{padding-bottom:calc(.75rem + env(safe-area-inset-bottom,0))}
     .assistant__row{display:flex;align-items:center;gap:.5rem;margin:.45rem 0}
     .assistant__row > span{min-width:150px;opacity:.85}
     .assistant__hint{opacity:.7}
@@ -247,7 +249,19 @@ var c = (typeof c === 'function')
   const btnHideSettings = root.querySelector("#as-hide-settings");
   const chkWake = root.querySelector("#as-wake-on");
   const inpWake = root.querySelector("#as-wake-phrase");
-  // ─── mute helpers ─────────────────────────────────────────────────────
+  
+  const settingsEl = root.querySelector(".assistant__settings");
+  function setSettingsVisible(visible) {
+    if (!settingsEl || !panel) return;
+    const wantVisible = !!visible;
+    settingsEl.hidden = !wantVisible;
+    panel.classList.toggle("assistant__panel--scrollable", wantVisible);
+    if (wantVisible) {
+      try { panel.scrollTop = 0; } catch {}
+      try { settingsEl.scrollIntoView({ block: "start", behavior: "smooth" }); } catch {}
+    }
+  }
+// ─── mute helpers ─────────────────────────────────────────────────────
   function isMuted() {
     try { return localStorage.getItem('assistant.mute') === '1'; } catch { return false; }
   }
@@ -504,6 +518,7 @@ var c = (typeof c === 'function')
   });
 
 
+  
   // ─── server TTS (buffered, explicit lang) ────────────────────────────
   async function speakServer(text, lang) {
     if (!API_BASE) throw new Error("no API");
@@ -523,6 +538,7 @@ var c = (typeof c === 'function')
     }
     const buf = await r.arrayBuffer();
 
+    // iOS: сначала пробуем WebAudio (разблокировано жестом)
     try {
       if (isIOS && typeof window.__ensureAudioUnlocked === "function") {
         const unlocked = await window.__ensureAudioUnlocked();
@@ -600,6 +616,7 @@ var c = (typeof c === 'function')
   }
 
 
+
   // ─── public speak() ──────────────────────────────────────────────────
   function speak(text) {
     if (typeof isMuted === 'function' && isMuted()) return;
@@ -628,10 +645,7 @@ var c = (typeof c === 'function')
     logEl.innerHTML = "";
     chat.history = [];
   });
-  btnHideSettings?.addEventListener("click", () => {
-    const s = root.querySelector(".assistant__settings");
-    if (s) s.hidden = true;
-  });
+  btnHideSettings?.addEventListener("click", () => setSettingsVisible(false));
 
   // === Sleep timer (helpers) ===========================================
   let sleepTimerId = null,
@@ -2054,10 +2068,10 @@ try {
     panel.hidden = true;
   });
   btnGear.addEventListener("click", () => {
-    const s = root.querySelector(".assistant__settings");
-    if (s) s.hidden = !s.hidden;
+    if (!settingsEl) return;
+    setSettingsVisible(settingsEl.hidden);
   });
-  btnSend.addEventListener("click", () => {
+btnSend.addEventListener("click", () => {
     const t = inputEl.value;
     inputEl.value = "";
     handleUserText(t);
