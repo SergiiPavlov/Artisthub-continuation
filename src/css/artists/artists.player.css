@@ -37,7 +37,7 @@
 
 /* Верхняя «шапка» для перетаскивания */
 .am-player__dragzone {
-  position: absolute;
+  position: static;
   top: 0;
   left: 0;
   right: 0;
@@ -53,12 +53,10 @@
 
 .am-player__close,
 .am-player__hide {
-  position: static;
-  z-index: auto;
+  padding: 0 10px;
   height: 32px;
-  line-height: 32px;
-  border-radius: 8px;
   border: 0;
+  background: transparent;
   color: #fff;
   display: inline-flex;
   align-items: center;
@@ -68,13 +66,25 @@
 
 .am-player__close {
   width: 32px;
-  line-height: 32px;
-  text-align: center;
-  background: #764191;
+  height: 32px;
+  border: 0;
+  background: transparent;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
 }
 .am-player__hide {
   padding: 0 10px;
-  background: #3a2a4f;
+  height: 32px;
+  border: 0;
+  background: transparent;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
 }
 .am-player__hide:hover,
 .am-player__hide:focus-visible {
@@ -92,7 +102,7 @@
 .am-player__host,
 .am-player__frame > div,
 .am-player__frame iframe {
-  position: absolute;
+  position: static;
   inset: 0;
   width: 100%;
   height: 100%;
@@ -101,10 +111,10 @@
 }
 
 .am-player__ytlink {
-  position: absolute;
-  top: 8px;
-  left: 8px;
-  z-index: 7;
+  position: static;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 6px 10px;
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.45);
@@ -123,7 +133,7 @@
   background: rgba(0, 0, 0, 0.6);
 }
 
-\.am-player__bar {
+.am-player__bar {
   position: static; /* бар не перекрывает iframe */
   margin-top: 8px; /* отступ от видео */
   display: grid;
@@ -147,18 +157,43 @@
 }
 
 /* Кнопки */
+
+/* icon-only style injected below */
+.am-player__close,
+.am-player__hide,
 .am-player__skip,
 .am-player__play,
 .am-player__mute {
-  cursor: pointer;
-  border: none;
-  background: #764191;
-  color: #fff;
   width: 32px;
   height: 32px;
-  border-radius: 8px;
+  border: 0;
+  border-radius: 8px; /* keep radius for focus ring shape, but invisible */
+  background: transparent;
+  color: #fff;
   line-height: 32px;
   text-align: center;
+  cursor: pointer;
+}
+.am-player__close:hover,
+.am-player__hide:hover,
+.am-player__skip:hover,
+.am-player__play:hover,
+.am-player__mute:hover {
+  filter: brightness(0.95);
+}
+
+.am-player__skip,
+.am-player__play,
+.am-player__mute {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px; /* keep radius for focus ring shape, but invisible */
+  background: transparent;
+  color: #fff;
+  line-height: 32px;
+  text-align: center;
+  cursor: pointer;
 }
 
 /* Время */
@@ -313,7 +348,7 @@
 .am-player__bubble::before,
 .am-player__bubble::after {
   content: '';
-  position: absolute;
+  position: static;
   inset: 0;
   border-radius: 999px;
   box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.14);
@@ -462,7 +497,7 @@
 }
 
 .am-player__fs {
-  position: absolute;
+  position: static;
   top: 8px;
   right: 44px;
   background: transparent;
@@ -483,7 +518,7 @@
 
 /* кнопка Fullscreen (под Close) */
 .am-player__fs {
-  position: absolute;
+  position: static;
   top: 48px; /* ниже верхнего ряда с Hide/× */
   right: 8px; /* выровнена с Close */
   z-index: 5; /* поверх iframe */
@@ -530,10 +565,10 @@
 :root.assistant-fs-doc .assistant-fs .am-player__bar,
 .am-player:fullscreen .am-player__bar,
 .app--fullscreen .am-player__bar {
-  position: absolute;
+  position: static;
   left: 0;
   right: 0;
-  bottom: 0;
+  margin-top: 8px;
   padding-bottom: env(safe-area-inset-bottom, 0);
   background: linear-gradient(to top, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0));
   z-index: 6;
@@ -541,14 +576,25 @@
 
 /* === Auto-hide for am-player controls (smooth) === */
 .am-player__bar,
-.am-player__close,
-.am-player__hide,
 .am-player__fs,
 .am-player__ytlink {
-  transition:
-    opacity 0.25s ease,
-    transform 0.25s ease;
-  will-change: opacity, transform;
+  position: static;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  text-decoration: none;
+  font:
+    600 12px/1 'IBM Plex Sans',
+    system-ui,
+    -apple-system,
+    Segoe UI,
+    Roboto,
+    Arial,
+    sans-serif;
 }
 
 /* Скрытое состояние */
@@ -558,13 +604,25 @@
   /* pointer-events kept enabled, we will disable on children except dragzone */
 }
 
-.am-player--ui-hidden .am-player__close,
-.am-player--ui-hidden .am-player__hide,
 .am-player--ui-hidden .am-player__fs,
 .am-player--ui-hidden .am-player__ytlink {
-  opacity: 0;
-  transform: translateY(4px);
-  pointer-events: none;
+  position: static;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  text-decoration: none;
+  font:
+    600 12px/1 'IBM Plex Sans',
+    system-ui,
+    -apple-system,
+    Segoe UI,
+    Roboto,
+    Arial,
+    sans-serif;
 }
 
 /* Фуллскрин: чуть сильнее сдвигаем вниз полосу */
@@ -577,11 +635,25 @@
 /* Уважение prefers-reduced-motion */
 @media (prefers-reduced-motion: reduce) {
   .am-player__bar,
-  .am-player__close,
-  .am-player__hide,
   .am-player__fs,
   .am-player__ytlink {
-    transition: none;
+    position: static;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.45);
+    color: #fff;
+    text-decoration: none;
+    font:
+      600 12px/1 'IBM Plex Sans',
+      system-ui,
+      -apple-system,
+      Segoe UI,
+      Roboto,
+      Arial,
+      sans-serif;
   }
 }
 
@@ -654,6 +726,7 @@
 
 /* === Center the drag handle in the middle gap (no overlap with buttons) === */
 .am-player__dragpad {
+  /* ensure dragpad relative */
   position: relative;
   min-width: 90px;
   height: 36px;
@@ -666,7 +739,7 @@
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  pointer-events: none; /* keep full drag on the whole middle zone */
+  pointer-events: none;
   opacity: 0.7;
 }
 
@@ -737,4 +810,43 @@
 .am-player__dragpad,
 .am-player__dragbtn {
   touch-action: none;
+}
+
+/* Ensure icon glyphs follow button color */
+.am-player__close svg,
+.am-player__hide svg,
+.am-player__skip svg,
+.am-player__play svg,
+.am-player__mute svg {
+  color: inherit;
+  fill: currentColor;
+}
+
+/* Icon-only hover/focus: subtle lift */
+.am-player__close:hover,
+.am-player__hide:hover,
+.am-player__skip:hover,
+.am-player__play:hover,
+.am-player__mute:hover {
+  filter: brightness(1.05);
+}
+
+.am-player__close:focus-visible,
+.am-player__hide:focus-visible,
+.am-player__skip:focus-visible,
+.am-player__play:focus-visible,
+.am-player__mute:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.65);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+/* Ensure SVGs take currentColor (white) */
+.am-player__close svg,
+.am-player__hide svg,
+.am-player__skip svg,
+.am-player__play svg,
+.am-player__mute svg {
+  color: inherit;
+  fill: currentColor;
 }
